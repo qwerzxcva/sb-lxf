@@ -182,7 +182,12 @@ func buildAndroid() {
 			"ts_omit_webclient", "ts_omit_doctor", "ts_omit_capture", "ts_omit_kube",
 			"ts_omit_aws", "ts_omit_synology", "ts_omit_bird",
 		}
-		baseTags = filterTags(sharedTags, heavyExcluded...)
+		// Add lx_idle_suspend (SPEC 020): suspends idle WireGuard/AWG endpoints,
+		// freeing recv-worker bufsArrs (dominant GC-scan holder) and preventing
+		// background work for unused nodes. No platform restriction (cross-platform).
+		// Reference: leadaxe sing-box-lx, FlClash, Bettbox all enable this in
+		// their Android-optimized builds.
+		baseTags = append(filterTags(sharedTags, heavyExcluded...), "with_lx_idle_suspend")
 	} else {
 		baseTags = append([]string{}, sharedTags...)
 	}
