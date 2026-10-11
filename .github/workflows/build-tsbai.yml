@@ -102,6 +102,54 @@ jobs:
             SHA256SUMS
           retention-days: 30
 
+  build-android-aar-slim:
+    name: Build sb-lxf Android AAR (slim profile — power-optimized)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+      - uses: android-actions/setup-android@v4
+        id: setup-ndk
+        with:
+          packages: "platform-tools platforms;android-21 platforms;android-24 ndk;28.0.13004108"
+      - name: Install gomobile (sagernet fork)
+        run: |
+          go install github.com/sagernet/gomobile/cmd/gomobile@v0.1.12
+          go install github.com/sagernet/gomobile/cmd/gobind@v0.1.12
+          GOMOBILE_BIN="$(go env GOPATH)/bin/gomobile"
+          GOBIND_BIN="$(go env GOPATH)/bin/gobind"
+          echo "gomobile: $GOMOBILE_BIN"
+          echo "gobind:  $GOBIND_BIN"
+          "$GOMOBILE_BIN" init || true
+          ls "$(go env GOPATH)/bin/" | grep -E 'gomobile|gobind'
+          echo "gomobile_bin=$GOMOBILE_BIN" >> "$GITHUB_ENV"
+          echo "gobind_bin=$GOBIND_BIN" >> "$GITHUB_ENV"
+      - name: Build libbox AAR (slim)
+        run: |
+          NDK_DIR="$(ls -d "$ANDROID_HOME"/ndk/*/ 2>/dev/null | sort -V | tail -1)"
+          export ANDROID_NDK_HOME="$NDK_DIR"
+          export JAVA_HOME=$(dirname $(dirname $(readlink -f $(which java))))
+          make lib_android_slim
+      - name: Name artifact + SHA256SUMS (slim)
+        run: |
+          VERSION="${{ github.ref_name }}"
+          if [[ "$VERSION" == v* ]]; then VERSION="${VERSION#v}"; fi
+          AAR="libbox-${VERSION}-slim.aar"
+          cp libbox.aar "$AAR"
+          sha256sum "$AAR" > SHA256SUMS.slim
+          echo "AAR=$AAR" >> "$GITHUB_ENV"
+          echo "Built slim: $AAR"
+          sha256sum "$AAR"
+      - name: Upload AAR artifact (slim)
+        uses: actions/upload-artifact@v4
+        with:
+          name: libbox-android-aar-slim
+          path: |
+            ${{ env.AAR }}
+            SHA256SUMS.slim
+          retention-days: 30
   build-linux-amd64:
     runs-on: ubuntu-latest
     steps:
