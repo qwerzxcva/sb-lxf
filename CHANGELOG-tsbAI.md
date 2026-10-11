@@ -39,3 +39,13 @@ Based on SagerNet/sing-box **v1.15.0-alpha.12**.
 - `-tags with_boxdd` adds the desktop daemon.
 - `-tags with_awg2 with_awg3` (needs Leadaxe wireguard-go fork) for AWG.
 - Link libbox/oomprofile on Go 1.23+: `-ldflags=-checklinkname=0`.
+## v1.15.0-ts.3 (2026-10-11)
+- CI: use `android-actions/setup-android@v3` (real SDK + NDK + platforms) instead of
+  fake SDK. Install `android-21`/`android-24` platforms for `gomobile bind`.
+- CI: install `github.com/sagernet/gomobile` fork (matches go.mod, not x/mobile).
+- Fix: `transport/v2rayxhttp/http3.go`, `http3_stub.go`, `http_version.go` restored
+  from Leadaxe lx-1.14.3 (batch-patch corruption).
+- Fix: Reality `KeyShare` constants + `OutboundRealityOptions.KeyShare` field
+  (Leadaxe SPEC 089).
+- Fix: `utls.HelloChrome_155`/`HelloFirefox_148` mapped to `133`/`120`
+  (metacubex/utls v1.8.7 max is 133/120).
