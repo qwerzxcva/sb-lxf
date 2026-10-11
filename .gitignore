@@ -1,0 +1,17 @@
+# Build artifacts
+*.aar
+*.so
+build/
+bin/
+
+# IDE
+.idea/
+*.iml
+.DS_Store
+
+# Gradle
+.gradle/
+app/build/
+
+# Generated
+app/libs/.libbox.version
