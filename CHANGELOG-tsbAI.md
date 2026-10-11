@@ -49,3 +49,15 @@ Based on SagerNet/sing-box **v1.15.0-alpha.12**.
   (Leadaxe SPEC 089).
 - Fix: `utls.HelloChrome_155`/`HelloFirefox_148` mapped to `133`/`120`
   (metacubex/utls v1.8.7 max is 133/120).
+
+## v1.15.0-ts.4 (2026-10-12) — Android-only power/size optimization
+- Add `-slim` flag to `cmd/internal/build_libbox`: drops `with_usbip`,
+  `with_openvpn`, `with_openconnect`, `with_tailscale` + all `ts_omit_*` from
+  the Android AAR build. sb-AI consumes quic/wireguard/utls/naive/clash_api
+  only — the dropped features add tens of MB and background-service overhead
+  with no benefit on Android.
+- New Makefile target `make lib_android_slim` (replaces `make lib_android` as
+  the recommended release path for Android-only clients).
+- Reference doc: `release/ANDROID_BUILD_TAGS.md` documents both profiles.
+- The default `lib_android` (full profile) is kept intact; existing CI uses it.
+- Rebased local onto latest remote (synced wireguard/utls sync from lx-1.14.3).
