@@ -51,22 +51,27 @@ Based on SagerNet/sing-box **v1.15.0-alpha.12**.
   (metacubex/utls v1.8.7 max is 133/120).
 
 ## v1.15.0-ts.4 (2026-10-12) — Android-only power/size optimization
-- Add `-slim` flag to `cmd/internal/build_libbox`: drops `with_usbip`,
-  `with_openvpn`, `with_openconnect`, `with_tailscale` + all `ts_omit_*` from
-  the Android AAR build. sb-AI consumes quic/wireguard/utls/naive/clash_api
-  only — the dropped features add tens of MB and background-service overhead
-  with no benefit on Android.
-- New Makefile target `make lib_android_slim` (replaces `make lib_android` as
-  the recommended release path for Android-only clients).
+- Add `-slim` flag to `cmd/internal/build_libbox` + `make lib_android_slim`
+  target: Android-first build profile for sb-AI release builds.
+- Slim profile drops only the transports sb-AI has no reference to:
+  `with_usbip`, `with_openvpn`, `with_openconnect`.
+- `with_tailscale` + all `ts_omit_*` are KEPT in slim because sb-AI exposes
+  "tailscale" as a first-class endpoint type (NodeEditorScreen /
+  SingBoxConfigGenerator ENDPOINT_TYPES). Removing it would break that feature.
+- Cross-fork validation: matches Karing (KaringX/sing-box) and PuerNya Android
+  AAR builds (same drop-usbip/openvpn/openconnect philosophy). sb-lxf's extra
+  power edge is the `tsbAI` TUN stack (GSO / multi_queue / oom-killer) vs the
+  gvisor stack those forks use.
 - Reference doc: `release/ANDROID_BUILD_TAGS.md` documents both profiles.
 - The default `lib_android` (full profile) is kept intact; existing CI uses it.
 - Rebased local onto latest remote (synced wireguard/utls sync from lx-1.14.3).
 
 ## v1.15.0-ts.5 (2026-10-12) — enable lx_idle_suspend (SPEC 020) in slim build
 - Add `with_lx_idle_suspend` to the Android slim profile (`lib_android_slim`).
-  This is the Leadaxe idle-suspend optimization (SPEC 020): idle WG/AWG endpoints
-  are suspended after a configurable timeout, freeing recv-worker bufsArrs (the
-  dominant GC-scan holder) and preventing background work for unused nodes.
-- Reference: enabled by default in FlClash, Bettbox, and sing-box-lx Android
-  builds. Slab allocations from idle tunnels now drop to zero at idle.
+  This is the Leadaxe idle-suspend optimization (SPEC 020): idle WG/Tailscale
+  endpoints are suspended after a configurable idle window, freeing
+  recv-worker bufsArrs (the dominant GC-scan holder) and preventing background
+  work for unused nodes.
+- Reference: enabled in FlClash, Bettbox, sing-box-lx, Karing, PuerNya
+  Android-optimized builds. Idle tunnels do zero work when unused.
 - The full (`lib_android`) build remains unchanged; slim-only.
