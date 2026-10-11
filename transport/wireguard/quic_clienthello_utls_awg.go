@@ -41,7 +41,7 @@ import (
 func browserHelloID(browser string) (utls.ClientHelloID, bool) {
 	switch browser {
 	case masqueBrowserChrome, masqueBrowserChromeFull:
-		return utls.HelloChrome_155, true
+		return utls.HelloChrome_133, true
 	case masqueBrowserFirefox:
 		return utls.HelloFirefox_148, true
 	default:
