@@ -1,0 +1,20 @@
+[package]
+name = "sb_lxf_rust_accel"
+version = "0.1.0"
+edition = "2021"
+description = "sb-lxf optional Rust accelerator: fast LPM/CIDR matching + checksums (C-ABI FFI)"
+license = "GPL-2.0-or-later"
+
+[lib]
+name = "sb_lxf_rust_accel"
+# 产出 staticlib（.a，cgo 静态链接用）与 rlib（Go 同 crate 复用）。
+# 去掉 cdylib：交叉编译 .so 需 NDK lld，且 cgo 只消费静态库。
+crate-type = ["staticlib", "rlib"]
+
+[profile.release]
+opt-level = 3
+lto = "fat"
+codegen-units = 1
+panic = "abort"
+
+# 无第三方依赖（自包含，避免 rust-src 下载 & 跨平台 ABI 风险）
