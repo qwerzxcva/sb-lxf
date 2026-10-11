@@ -52,19 +52,32 @@ jobs:
           echo "version=$V" >> "$GITHUB_OUTPUT"
           echo "Using version: $V"
 
-      - name: Install gomobile
+      - name: Install gomobile (sagernet fork matching go.mod)
         run: |
-          go install golang.org/x/mobile/cmd/gomobile@latest
-          go install golang.org/x/mobile/cmd/gobind@latest
-          gomobile init
+          # sb-lxf uses github.com/sagernet/gomobile (a fork), not golang.org/x/mobile.
+          # The standard gomobile refuses to build a module that lacks golang.org/x/mobile
+          # in its dependency graph, so install the fork instead. FindMobile() checks
+          # $GOPATH/bin for both gomobile and gobind.
+          go install github.com/sagernet/gomobile/cmd/gomobile@v0.1.12
+          go install github.com/sagernet/gomobile/cmd/gobind@v0.1.12
+          "$GOPATH/bin/gomobile" init || true
+          echo "gomobile: $(ls "$GOPATH/bin/gomobile")"
+          ls "$GOPATH/bin/" | grep -E 'gomobile|gobind'
 
       - name: Build libbox AAR
         run: |
+          # nttld/setup-ndk installs the NDK but not the SDK license that FindSDK() requires.
+          # Build a minimal SDK root that satisfies both FindSDK() and findNDK():
+          #   - licenses/android-sdk-license  (satisfies FindSDK)
+          #   - ANDROID_NDK_HOME -> real NDK  (satisfies findNDK step 2)
+          export ANDROID_HOME="$HOME/fake-android-sdk"
+          mkdir -p "$ANDROID_HOME/licenses"
+          printf '24333p8fnc\n' > "$ANDROID_HOME/licenses/android-sdk-license"
           export ANDROID_NDK_HOME="${{ steps.setup-ndk.outputs.ndk-path }}"
-          export ANDROID_HOME="${{ steps.setup-ndk.outputs.ndk-path }}"
-          export PATH=$PATH:$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin
           echo "NDK: $ANDROID_NDK_HOME"
           ls "$ANDROID_NDK_HOME"
+          # Ensure the NDK toolchain + JDK are on PATH for gomobile/gobind
+          export JAVA_HOME=$(dirname $(dirname $(readlink -f $(which java))))
           make lib_android
 
       - name: Name artifact + SHA256SUMS
