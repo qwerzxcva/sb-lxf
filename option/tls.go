@@ -255,4 +255,6 @@ type OutboundRealityOptions struct {
 	Enabled   bool   `json:"enabled,omitempty"`
 	PublicKey string `json:"public_key,omitempty"`
 	ShortID   string `json:"short_id,omitempty"`
+	// KeyShare picks the key exchange offered in the REALITY ClientHello
+	KeyShare string `json:"key_share,omitempty" enum:"hybrid,classical"`
 }
