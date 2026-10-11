@@ -126,6 +126,16 @@ jobs:
           ls "$(go env GOPATH)/bin/" | grep -E 'gomobile|gobind'
           echo "gomobile_bin=$GOMOBILE_BIN" >> "$GITHUB_ENV"
           echo "gobind_bin=$GOBIND_BIN" >> "$GITHUB_ENV"
+      - name: Determine version (match main job)
+        id: version
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            V="${{ github.event.inputs.version }}"
+          else
+            V="v$(date +%Y.%m.%d)-$(git rev-parse --short HEAD)"
+          fi
+          echo "version=$V" >> "$GITHUB_OUTPUT"
+          echo "Using version: $V"
       - name: Build libbox AAR (slim)
         run: |
           NDK_DIR="$(ls -d "$ANDROID_HOME"/ndk/*/ 2>/dev/null | sort -V | tail -1)"
@@ -134,9 +144,8 @@ jobs:
           make lib_android_slim
       - name: Name artifact + SHA256SUMS (slim)
         run: |
-          VERSION="${{ github.ref_name }}"
-          if [[ "$VERSION" == v* ]]; then VERSION="${VERSION#v}"; fi
-          AAR="libbox-${VERSION}-slim.aar"
+          VERSION="${{ steps.version.outputs.version }}"
+          AAR="libbox-${VERSION#v}-slim.aar"
           cp libbox.aar "$AAR"
           sha256sum "$AAR" > SHA256SUMS.slim
           echo "AAR=$AAR" >> "$GITHUB_ENV"
@@ -174,7 +183,7 @@ jobs:
           retention-days: 30
 
   release:
-    needs: [build-android-aar, build-linux-amd64]
+    needs: [build-android-aar, build-android-aar-slim, build-linux-amd64]
     if: github.event.inputs.release == 'true' || github.event_name == 'push'
     runs-on: ubuntu-latest
     permissions:
@@ -186,11 +195,22 @@ jobs:
           name: libbox-android-aar
           path: dist
 
+      - name: Download slim AAR artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: libbox-android-aar-slim
+          path: dist
+
       - name: Download binary artifact
         uses: actions/download-artifact@v4
         with:
           name: sing-box-linux-amd64
           path: dist
+
+      - name: Merge SHA256SUMS (full + slim)
+        run: |
+          cat dist/SHA256SUMS dist/SHA256SUMS.slim > dist/SHA256SUMS.all 2>/dev/null || true
+          ls -la dist/
 
       - name: Create Release
         uses: softprops/action-gh-release@v2
