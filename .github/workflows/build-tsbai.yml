@@ -60,9 +60,14 @@ jobs:
           # $GOPATH/bin for both gomobile and gobind.
           go install github.com/sagernet/gomobile/cmd/gomobile@v0.1.12
           go install github.com/sagernet/gomobile/cmd/gobind@v0.1.12
-          "$GOPATH/bin/gomobile" init || true
-          echo "gomobile: $(ls "$GOPATH/bin/gomobile")"
-          ls "$GOPATH/bin/" | grep -E 'gomobile|gobind'
+          GOMOBILE_BIN="$(go env GOPATH)/bin/gomobile"
+          GOBIND_BIN="$(go env GOPATH)/bin/gobind"
+          echo "gomobile: $GOMOBILE_BIN"
+          echo "gobind:  $GOBIND_BIN"
+          "$GOMOBILE_BIN" init || true
+          ls "$(go env GOPATH)/bin/" | grep -E 'gomobile|gobind'
+          echo "gomobile_bin=$GOMOBILE_BIN" >> "$GITHUB_ENV"
+          echo "gobind_bin=$GOBIND_BIN" >> "$GITHUB_ENV"
 
       - name: Build libbox AAR
         run: |
