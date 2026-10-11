@@ -75,3 +75,20 @@ Based on SagerNet/sing-box **v1.15.0-alpha.12**.
 - Reference: enabled in FlClash, Bettbox, sing-box-lx, Karing, PuerNya
   Android-optimized builds. Idle tunnels do zero work when unused.
 - The full (`lib_android`) build remains unchanged; slim-only.
+## v1.15.0-ts.6 (2026-10-12) — slim release + idle-suspend active
+- Build tag: `with_lx_idle_suspend` (SPEC 020) is now in the slim profile
+  (`lib_android_slim`). Idle WireGuard/Tailscale endpoints suspend after the
+  configured window, freeing recv-worker bufsArrs (dominant GC-scan holder) and
+  cutting background work for unused tunnels to zero.
+- Slim profile summary:
+  ```
+  quic, wireguard, utls, naive_outbound, clash_api,
+  tailscale(+all ts_omit), lx_idle_suspend, badlinkname, tfogo_checklinkname0
+  ```
+  Dropped: usbip, openvpn, openconnect (none referenced by sb-AI).
+- Cross-fork validation vs Karing / PuerNya / shtorm-7 / reF1nd / Kwisma:
+  the slim subset matches the minimal set used by all of them; sb-lxf adds
+  tsbAI (pure-Go TUN with splice/GSO/multi_queue/oom-killer) which is a power
+  advantage over their gvisor stack.
+- CI: the `build-android-aar-slim` job builds and uploads `libbox-{ver}-slim.aar`
+  for all pushes/releases. This AAR is ready for sb-AI consumption.
