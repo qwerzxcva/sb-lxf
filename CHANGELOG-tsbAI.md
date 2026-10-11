@@ -61,3 +61,12 @@ Based on SagerNet/sing-box **v1.15.0-alpha.12**.
 - Reference doc: `release/ANDROID_BUILD_TAGS.md` documents both profiles.
 - The default `lib_android` (full profile) is kept intact; existing CI uses it.
 - Rebased local onto latest remote (synced wireguard/utls sync from lx-1.14.3).
+
+## v1.15.0-ts.5 (2026-10-12) — enable lx_idle_suspend (SPEC 020) in slim build
+- Add `with_lx_idle_suspend` to the Android slim profile (`lib_android_slim`).
+  This is the Leadaxe idle-suspend optimization (SPEC 020): idle WG/AWG endpoints
+  are suspended after a configurable timeout, freeing recv-worker bufsArrs (the
+  dominant GC-scan holder) and preventing background work for unused nodes.
+- Reference: enabled by default in FlClash, Bettbox, and sing-box-lx Android
+  builds. Slab allocations from idle tunnels now drop to zero at idle.
+- The full (`lib_android`) build remains unchanged; slim-only.
