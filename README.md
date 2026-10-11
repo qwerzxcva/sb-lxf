@@ -1,60 +1,31 @@
-# sb-lxf (tsbAI Stack Kernel)
+# sing-box
 
-## 概述
+The universal proxy platform.
 
-sb-lxf 是基于 **sing-box-lx** 魔改的内核仓库，引入了 **tsbAI TUN 栈**（移植自 sing-box 1.15+ 的 Go TUN stack，融合 Clash 新栈设计思路）。
+[![Packaging status](https://repology.org/badge/vertical-allrepos/sing-box.svg)](https://repology.org/project/sing-box/versions)
 
-### tsbAI 栈特性
+## Documentation
 
-| 栈类型 | 说明 | 依赖 |
-|--------|------|------|
-| `system` | 系统栈（宿主内核 TCP） | 无额外依赖 |
-| `gvisor` | 全 gVisor 用户态栈 | `-tags with_gvisor` |
-| `mixed` | TCP=gVisor / UDP=system | `-tags with_gvisor` |
-| **`go`** | **纯 Go TUN 栈（新）** | **无 gVisor 依赖** |
+https://sing-box.sagernet.org
 
-`go` 栈是 sing-box 1.15.0 引入的新特性：
-- 不依赖 gVisor，纯 Go 实现
-- 内存占用显著降低
-- 需要 sing-tun v0.8+（含 `stack.go` 中的 `NewGo` 实现）
+## License
 
-### 与 sing-box-lx 的关系
-
-- 基于 Leadaxe/sing-box-lx v1.14.x 分支
-- 添加了 tsbAI TUN 栈（`go` stack 支持）
-- 内核库文件名：`libbox.aar` → 版本号 `v1.15.0-tsbai.1`
-
-### 与 sb-AI 的关系
-
-sb-AI 项目将此内核作为 Android 子模块引用：
-```bash
-git submodule add https://github.com/QWERZXCVA/sb-lxf.git android/core/sb-lxf
 ```
+Copyright (C) 2022 by nekohasekai <contact-sagernet@sekai.icu>
 
-Android 侧通过 `scripts/fetch-libbox.sh` 下载预编译 AAR（类似 sb-AI 当前的 LxBox 流程）。
+This program is free software: you can redistribute it and/or modify
+it under the terms of the GNU General Public License as published by
+the Free Software Foundation, either version 3 of the License, or
+(at your option) any later version.
 
----
+This program is distributed in the hope that it will be useful,
+but WITHOUT ANY WARRANTY; without even the implied warranty of
+MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+GNU General Public License for more details.
 
-## 构建
+You should have received a copy of the GNU General Public License
+along with this program. If not, see <http://www.gnu.org/licenses/>.
 
-```bash
-# 构建桌面版
-make -f Makefile.lx lx-build
-
-# 构建 Android AAR
-make lib_install && make lib_android
+In addition, no derivative work may use the name or imply association
+with this application without prior consent.
 ```
-
-## 配置变更（vs 上游 sing-box-lx）
-
-### DNS 高级功能（客户端 sb-AI 支持）
-- `dns.fallback` + `dns.fallback-filter`：DNS 污染检测和回退
-- `dns.fakeip-filter`：fakeIP 排除域名列表
-- `dns.nameserver-policy`：按域名指定不同 DNS
-
-这些在 sing-box 1.14+ 中均已原生支持，无需内核修改。
-
-### TUN 栈新增 `go` 选项
-- 配置字段：`inbounds[].tun.stack = "go"`
-- sing-box 1.15+ 默认使用 `go` 栈（不再需要 `stack` 字段时的默认行为）
-- 旧版内核（1.14.x）不支持 `go` 栈，需手动选择 `mixed`/`gvisor`/`system`
