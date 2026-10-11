@@ -66,7 +66,7 @@ Based on SagerNet/sing-box **v1.15.0-alpha.12**.
 - The default `lib_android` (full profile) is kept intact; existing CI uses it.
 - Rebased local onto latest remote (synced wireguard/utls sync from lx-1.14.3).
 
-## v1.15.0-ts.5 (2026-10-12) — enable lx_idle_suspend (SPEC 020) in slim build
+## v1.15.0-ts.5 (2026-10-12) — attempt to enable lx_idle_suspend (SPEC 020) in slim build (deferred)
 - Add `with_lx_idle_suspend` to the Android slim profile (`lib_android_slim`).
   This is the Leadaxe idle-suspend optimization (SPEC 020): idle WG/Tailscale
   endpoints are suspended after a configurable idle window, freeing
