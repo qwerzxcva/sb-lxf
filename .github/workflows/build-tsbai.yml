@@ -35,11 +35,12 @@ jobs:
         with:
           go-version: ${{ env.GO_VERSION }}
 
-      - name: Set up Android NDK
-        uses: nttld/setup-ndk@v1
+      - name: Set up Android NDK + SDK platforms
+        uses: android-actions/setup-android@v3
         id: setup-ndk
         with:
-          ndk-version: ${{ env.ANDROID_NDK_VERSION }}
+          ndk: ${{ env.ANDROID_NDK_VERSION }}
+          androidsdk: "platform-tools android-21 android-24"
 
       - name: Determine version
         id: version
@@ -71,17 +72,15 @@ jobs:
 
       - name: Build libbox AAR
         run: |
-          # nttld/setup-ndk installs the NDK but not the SDK license that FindSDK() requires.
-          # Build a minimal SDK root that satisfies both FindSDK() and findNDK():
-          #   - licenses/android-sdk-license  (satisfies FindSDK)
-          #   - ANDROID_NDK_HOME -> real NDK  (satisfies findNDK step 2)
-          export ANDROID_HOME="$HOME/fake-android-sdk"
-          mkdir -p "$ANDROID_HOME/licenses"
-          printf '24333p8fnc\n' > "$ANDROID_HOME/licenses/android-sdk-license"
-          export ANDROID_NDK_HOME="${{ steps.setup-ndk.outputs.ndk-path }}"
-          echo "NDK: $ANDROID_NDK_HOME"
-          ls "$ANDROID_NDK_HOME"
-          # Ensure the NDK toolchain + JDK are on PATH for gomobile/gobind
+          # android-actions/setup-android sets ANDROID_HOME to the installed SDK
+          # (licenses + platforms + NDK under $ANDROID_HOME/ndk/). findNDK() scans
+          # $ANDROID_HOME/ndk/ automatically, so just make sure it's the real one.
+          echo "ANDROID_HOME: $ANDROID_HOME"
+          ls "$ANDROID_HOME/licenses" "$ANDROID_HOME/platforms" 2>&1 | head
+          # Locate the installed NDK (setup-android uses a version dir, not "r28c")
+          NDK_DIR="$(ls -d "$ANDROID_HOME"/ndk/*/ 2>/dev/null | sort -V | tail -1)"
+          echo "Installed NDK: $NDK_DIR"
+          export ANDROID_NDK_HOME="$NDK_DIR"
           export JAVA_HOME=$(dirname $(dirname $(readlink -f $(which java))))
           make lib_android
 
