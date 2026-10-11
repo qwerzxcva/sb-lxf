@@ -60,7 +60,11 @@ jobs:
 
       - name: Build libbox AAR
         run: |
-          export PATH=$PATH:${{ steps.setup-ndk.outputs.ndk-path }}/toolchains/llvm/prebuilt/linux-x86_64/bin
+          export ANDROID_NDK_HOME="${{ steps.setup-ndk.outputs.ndk-path }}"
+          export ANDROID_HOME="${{ steps.setup-ndk.outputs.ndk-path }}"
+          export PATH=$PATH:$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin
+          echo "NDK: $ANDROID_NDK_HOME"
+          ls "$ANDROID_NDK_HOME"
           make lib_android
 
       - name: Name artifact + SHA256SUMS
