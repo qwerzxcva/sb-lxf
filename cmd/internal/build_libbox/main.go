@@ -20,6 +20,10 @@ var (
 	debugEnabled bool
 	target       string
 	platform     string
+	// slim: Android-only power/size profile — drop heavy features sb-AI does not
+	// use (usbip / openvpn / openconnect / tailscale + all ts_omit_*). Keeps the
+	// core proxy stack (quic / wireguard / utls / naive / clash_api).
+	slimEnabled bool
 	// withTailscale bool
 )
 
@@ -27,6 +31,7 @@ func init() {
 	flag.BoolVar(&debugEnabled, "debug", false, "enable debug")
 	flag.StringVar(&target, "target", "android", "target platform")
 	flag.StringVar(&platform, "platform", "", "specify platform")
+	flag.BoolVar(&slimEnabled, "slim", false, "android-only slim profile: drop usbip/openvpn/openconnect/tailscale for lower power & smaller AAR")
 	// flag.BoolVar(&withTailscale, "with-tailscale", false, "build tailscale for iOS and tvOS")
 }
 
@@ -163,8 +168,27 @@ func buildAndroid() {
 
 	bindTarget := getAndroidBindTarget()
 
+	// Android-only slim profile: drop heavy features sb-AI does not use, so the
+	// AAR is smaller and the kernel uses less CPU/battery at runtime.
+	// The full feature set is preserved for non-slim (default) builds.
+	// Reference: sb-AI only consumes quic/wireguard/utls/naive/clash_api;
+	// usbip / openvpn / openconnect / tailscale are unused on Android and add
+	// ~tens of MB + background-service overhead.
+	var baseTags []string
+	if slimEnabled {
+		heavyExcluded := []string{
+			"with_usbip", "with_openvpn", "with_openconnect", "with_tailscale",
+			"ts_omit_logtail", "ts_omit_ssh", "ts_omit_drive", "ts_omit_taildrop",
+			"ts_omit_webclient", "ts_omit_doctor", "ts_omit_capture", "ts_omit_kube",
+			"ts_omit_aws", "ts_omit_synology", "ts_omit_bird",
+		}
+		baseTags = filterTags(sharedTags, heavyExcluded...)
+	} else {
+		baseTags = append([]string{}, sharedTags...)
+	}
+
 	// Build main variant (SDK 24)
-	mainTags := append([]string{}, sharedTags...)
+	mainTags := append([]string{}, baseTags...)
 	// mainTags = append(mainTags, memcTags...)
 	if debugEnabled {
 		mainTags = append(mainTags, debugTags...)
@@ -176,7 +200,7 @@ func buildAndroid() {
 	}, bindTarget)
 
 	// Build legacy variant (SDK 21, no naive outbound)
-	legacyTags := filterTags(sharedTags, "with_naive_outbound")
+	legacyTags := filterTags(baseTags, "with_naive_outbound")
 	// legacyTags = append(legacyTags, memcTags...)
 	if debugEnabled {
 		legacyTags = append(legacyTags, debugTags...)
