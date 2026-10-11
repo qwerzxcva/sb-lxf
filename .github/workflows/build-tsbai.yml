@@ -89,8 +89,7 @@ jobs:
           AAR="libbox-${VERSION#v}.aar"
           cp libbox.aar "$AAR"
           sha256sum "$AAR" > SHA256SUMS
-          echo "$AAR" > AAR_NAME.txt
-          echo "$AAR" >> "$GITHUB_ENV"
+          echo "AAR=$AAR" >> "$GITHUB_ENV"
           echo "Built: $AAR"
           sha256sum "$AAR"
 
