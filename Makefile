@@ -257,6 +257,12 @@ test_stdio:
 lib_android:
 	go run ./cmd/internal/build_libbox -target android
 
+# Android-only slim profile: smaller AAR + lower runtime power. Drops usbip /
+# openvpn / openconnect / tailscale (unused by sb-AI). Use this for release
+# builds where power/size matter; use lib_android for the full feature set.
+lib_android_slim:
+	go run ./cmd/internal/build_libbox -target android -slim
+
 lib_apple:
 	go run ./cmd/internal/build_libbox -target apple
 
