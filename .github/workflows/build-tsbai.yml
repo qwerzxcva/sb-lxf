@@ -36,11 +36,10 @@ jobs:
           go-version: ${{ env.GO_VERSION }}
 
       - name: Set up Android NDK + SDK platforms
-        uses: android-actions/setup-android@v3
+        uses: android-actions/setup-android@v4
         id: setup-ndk
         with:
-          ndk: ${{ env.ANDROID_NDK_VERSION }}
-          androidsdk: "platform-tools android-21 android-24"
+          packages: "platform-tools platforms;android-21 platforms;android-24 ndk;28.0.13004108"
 
       - name: Determine version
         id: version
