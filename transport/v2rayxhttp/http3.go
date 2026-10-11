@@ -1,0 +1,225 @@
+//go:build with_quic
+
+package v2rayxhttp
+
+import(
+	"context"
+	stdTLS"crypto/tls"
+	"errors"
+	"io"
+	"net"
+	"net/http"
+	"runtime"
+	"sync/atomic"
+	"time"
+
+	"github.com/sagernet/quic-go"
+	"github.com/sagernet/quic-go/http3"
+	"github.com/sagernet/sing-box/common/tls"
+	E"github.com/sagernet/sing/common/exceptions"
+	M"github.com/sagernet/sing/common/metadata"
+	N"github.com/sagernet/sing/common/network"
+)
+
+//lx:SPEC104—XHTTPoverHTTP/3,thetransportXrayuseswhentls.alpnis
+//exactly["h3"](theserverthenlistensonQUIConly).
+
+const(
+	//http3MaxIdleTimeoutisXray'snet.ConnIdleTimeout.WithChromeParrotquic-go
+	//pinsitsownvalue;itissetforparitywithXray'sconfig.
+	http3MaxIdleTimeout=300*time.Second
+	//http3DefaultKeepAlivePeriodisXray'sQuicgoH3KeepAlivePeriod,usedwhen
+	//xmux.h_keep_alive_periodis0.
+	http3DefaultKeepAlivePeriod=10*time.Second
+)
+
+//http3XmuxConnisonepooledHTTP/3connection.http3.TransportkeepsoneQUIC
+//connectionperhostandeveryrequesttargetsserverAddr,sotheresourceis
+//oneQUICconnection,asanhttp2.TransportisoneTCPconnection.
+typehttp3XmuxConnstruct{
+	transport*http3.Transport
+	//connisthelastQUICconnectionthetransportdialed;onceitisgonethe
+	//resourceisevictedinsteadoflettinghttp3.Transportredialsilently.
+	connatomic.Pointer[quic.Conn]
+	closedatomic.Bool
+}
+
+func(c*http3XmuxConn)Close(){
+	ifc.closed.Swap(true){
+		return
+	}
+	c.transport.Close()
+}
+
+func(c*http3XmuxConn)IsClosed()bool{
+	ifc.closed.Load(){
+		returntrue
+	}
+	conn:=c.conn.Load()
+	ifconn==nil{
+		returnfalse
+	}
+	select{
+	case<-conn.Context().Done():
+		returntrue
+	default:
+		returnfalse
+	}
+}
+
+func(c*http3XmuxConn)roundTripper()http.RoundTripper{
+	returnc.transport
+}
+
+//http3KeepAlivePeriodmapsxmux.h_keep_alive_periodtoquic.Config:0is
+//Xray's10sdefault,anegativevalueturnskeep-aliveoff.
+funchttp3KeepAlivePeriod(periodtime.Duration)time.Duration{
+	switch{
+	caseperiod==0:
+		returnhttp3DefaultKeepAlivePeriod
+	caseperiod<0:
+		return0
+	default:
+		returnperiod
+	}
+}
+
+//http3PathMTUDiscoveryreportswhetherquic-gopathMTUdiscoverystayson:
+//Xrayturnsitoffeverywhereexceptlinux,windowsanddarwin(Android
+//included).
+funchttp3PathMTUDiscovery()bool{
+	switchruntime.GOOS{
+	case"linux","windows","darwin":
+		returntrue
+	default:
+		returnfalse
+	}
+}
+
+//newHTTP3TransportreturnsthefactoryofpooledHTTP/3connections.warn
+//receivestheload-timewarningsofSPEC104§6.
+funcnewHTTP3Transport(dialerN.Dialer,serverAddrM.Socksaddr,tlsConfigtls.Config,keepAlivePeriodtime.Duration,warnfunc(string))(func()xmuxConn,error){
+	stdConfig,fromUTLS,err:=tls.STDConfigForQUIC(tlsConfig)
+	vardialErrerror
+	iferr!=nil{
+		if!errors.Is(err,tls.ErrECHOverQUIC){
+			returnnil,E.Cause(err,"v2ray-xhttp:HTTP/3TLSconfig")
+		}
+		//Onebadsubscriptionnodemustnotfailthewholeconfig:itloads,its
+		//dialsfail.
+		warn("ECHisnotsupportedoverHTTP/3")
+		dialErr=E.New("v2ray-xhttp:ECHisnotsupportedoverHTTP/3")
+		stdConfig=&stdTLS.Config{}
+	}
+	iffromUTLS{
+		warn("utlsfingerprintisnotappliedoverHTTP/3,theQUIChandshakeusestheChromeprofile")
+	}
+	chromeParrot:=true
+	ifstdConfig.VerifyConnection!=nil{
+		//quic-gorefusesVerifyConnectionwithChromeParrot;certificate
+		//verificationoutranksthelookofthehandshake.
+		chromeParrot=false
+		warn("disable_sniturnsofftheChromeQUICprofileforthisserver")
+	}
+	iflen(stdConfig.Certificates)>0{
+		//ChromeParrotrefusesCertificates(aserver-sidefieldforquic-go);a
+		//clientcertificatetravelsthroughGetClientCertificateinstead.
+		certificate:=stdConfig.Certificates[0]
+		stdConfig.Certificates=nil
+		stdConfig.GetClientCertificate=func(*stdTLS.CertificateRequestInfo)(*stdTLS.Certificate,error){
+			return&certificate,nil
+		}
+	}
+	stdConfig.NextProtos=[]string{http3.NextProtoH3}
+	quicConfig:=&quic.Config{
+		MaxIdleTimeout:http3MaxIdleTimeout,
+		KeepAlivePeriod:http3KeepAlivePeriod(keepAlivePeriod),
+		MaxIncomingStreams:-1,
+		DisablePathMTUDiscovery:!http3PathMTUDiscovery(),
+		ChromeParrot:chromeParrot,
+	}
+	returnfunc()xmuxConn{
+		conn:=&http3XmuxConn{}
+		conn.transport=&http3.Transport{
+			TLSClientConfig:stdConfig,
+			QUICConfig:quicConfig,
+			//TheaddressargumentistheURLhost,whichisserverAddranyway;the
+			//TLSconfigisours,notthetransport'scopy,whichwouldputtheURL
+			//hostintoanSNIthatdisable_snileftempty.
+			Dial:func(ctxcontext.Context,_string,_*stdTLS.Config,quicConfig*quic.Config)(*quic.Conn,error){
+				ifdialErr!=nil{
+					returnnil,dialErr
+				}
+				packetConn,err:=dialer.DialContext(ctx,N.NetworkUDP,serverAddr)
+				iferr!=nil{
+					returnnil,E.Cause(err,"v2ray-xhttp:HTTP/3needsUDPtotheserver")
+				}
+				quicConn,err:=quic.DialEarlyConn(ctx,packetConn,stdConfig.Clone(),quicConfig)
+				iferr!=nil{
+					packetConn.Close()
+					returnnil,err
+				}
+				//quic-godoesnotowntheconnitwasgiven:closeitwhentheQUIC
+				//connectionends.
+				gofunc(){
+					<-quicConn.Context().Done()
+					packetConn.Close()
+				}()
+				conn.conn.Store(quicConn)
+				returnquicConn,nil
+			},
+		}
+		returnconn
+	},nil
+}
+
+//quicHiddenErrorreplacesaquic-go/http3errorattheconnboundary.Itkeeps
+//thetextanddropsTimeout()/Temporary():theconnreturnsitssavedread
+//erroroneveryRead,andaconsumerthattakesTimeout()foranexpired
+//deadline(orretriesTemporary())andreadsagainwouldspinwithouta
+//syscall(theSPEC082class).Connection-levelerrorskeepunwrappingto
+//net.ErrClosedsotherelaystillseesaclosedconnection.
+typequicHiddenErrorstruct{
+	textstring
+	closedbool
+}
+
+func(e*quicHiddenError)Error()string{
+	returne.text
+}
+
+func(e*quicHiddenError)Unwrap()error{
+	ife.closed{
+		returnnet.ErrClosed
+	}
+	returnnil
+}
+
+funchideQUICError(errerror)error{
+	iferr==nil||err==io.EOF{
+		returnerr
+	}
+	var(
+		idleTimeoutError*quic.IdleTimeoutError
+		handshakeTimeoutError*quic.HandshakeTimeoutError
+		statelessResetError*quic.StatelessResetError
+		transportError*quic.TransportError
+		applicationError*quic.ApplicationError
+		versionNegotiationError*quic.VersionNegotiationError
+		streamError*quic.StreamError
+		h3Error*http3.Error
+	)
+	switch{
+	caseerrors.As(err,&idleTimeoutError),
+		errors.As(err,&handshakeTimeoutError),
+		errors.As(err,&statelessResetError),
+		errors.As(err,&transportError),
+		errors.As(err,&applicationError),
+		errors.As(err,&versionNegotiationError):
+		return&quicHiddenError{text:err.Error(),closed:true}
+	caseerrors.As(err,&streamError),errors.As(err,&h3Error):
+		return&quicHiddenError{text:err.Error()}
+	default:
+		returnerr
+	}
+}

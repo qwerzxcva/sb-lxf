@@ -82,15 +82,24 @@ func (c *UTLSClientConfig) STDConfig() (*STDConfig, error) {
 	return nil, E.New("unsupported usage for uTLS")
 }
 
-func (c *UTLSClientConfig) Client(conn net.Conn) (Conn, error) {
+// wrapClientConn puts the ClientHello wrappers the config asked for around the
+// raw connection: `fragment` / `record_fragment` (tlsfragment) and `spoof`. It is
+// the one place both uTLS-based clients take them from — Client() here and the
+// REALITY client, which builds its UConn by hand and, before SPEC 088, did so on
+// the bare conn, silently ignoring both fragment flags. lx: SPEC 088.
+func (c *UTLSClientConfig) wrapClientConn(conn net.Conn) (net.Conn, error) {
 	if c.fragment || c.recordFragment {
 		conn = tf.NewConn(conn, c.ctx, c.fragment, c.recordFragment, c.fragmentFallbackDelay)
 	}
-	conn, err := applyTLSSpoof(conn, c.spoof, c.spoofMethod)
+	return applyTLSSpoof(conn, c.spoof, c.spoofMethod)
+}
+
+func (c *UTLSClientConfig) Client(conn net.Conn) (Conn, error) {
+	conn, err := c.wrapClientConn(conn)
 	if err != nil {
 		return nil, err
 	}
-	return &utlsALPNWrapper{utlsConnWrapper{utls.UClient(conn, c.config.Clone(), c.id)}, c.config.NextProtos}, nil
+	return newLXUTLSConn(utls.UClient(conn, c.config.Clone(), c.id), c.config.NextProtos), nil // lx: SPEC 122 — ALPN once, release the handshake state
 }
 
 func (c *UTLSClientConfig) SetSessionIDGenerator(generator func(clientHello []byte, sessionID []byte) error) {
@@ -366,6 +375,7 @@ func init() {
 	randomizedFingerprint = utls.HelloRandomized
 	randomizedFingerprint.Seed, _ = utls.NewPRNGSeed()
 	randomizedFingerprint.Weights = &weights
+	lxRandomFingerprints() // lx: SPEC 123 — hybrid share and ALPN in random/randomized
 }
 
 func uTLSClientHelloID(name string) (utls.ClientHelloID, error) {
@@ -374,6 +384,8 @@ func uTLSClientHelloID(name string) (utls.ClientHelloID, error) {
 		fallthrough
 	case "chrome", "":
 		return utls.HelloChrome_Auto, nil
+	case "chrome_155": // lx: SPEC 118 — opt-in Chrome 155 preset from the utls fork; "chrome" stays 133
+		return utls.HelloChrome_155, nil
 	case "firefox":
 		return utls.HelloFirefox_Auto, nil
 	case "edge":

@@ -39,6 +39,9 @@ type CommandClient struct {
 type CommandClientOptions struct {
 	commands       []int32
 	StatusInterval int64
+	// lx:begin dns
+	DNSIncludeAnswers bool // SPEC 018 — attach full response.Answer per DNS event (CNAME chain)
+	// lx:end dns
 }
 
 func (o *CommandClientOptions) AddCommand(command int32) {
@@ -57,6 +60,9 @@ type CommandClientHandler interface {
 	InitializeClashMode(modeList StringIterator, currentMode string)
 	UpdateClashMode(newMode string)
 	WriteConnectionEvents(events *ConnectionEvents)
+	// lx:begin dns
+	WriteDNSQuery(query *DnsQuery) // SPEC 018 — structured DNS-query event (multiplexed CommandDNS)
+	// lx:end dns
 }
 
 type LogEntry struct {
@@ -333,6 +339,10 @@ func (c *CommandClient) dispatchCommands(client daemon.StartedServiceClient, ctx
 			go c.handleConnectionsStream(client, ctx)
 		case CommandOutbounds:
 			go c.handleOutboundsStream(client, ctx)
+		// lx:begin dns
+		case CommandDNS:
+			go c.handleDNSStream(client, ctx)
+		// lx:end dns
 		default:
 			return E.New("unknown command: ", command)
 		}

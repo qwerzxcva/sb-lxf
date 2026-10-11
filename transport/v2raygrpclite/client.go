@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/sagernet/sing-box/adapter"
+	"github.com/sagernet/sing-box/common/grpcname"
 	"github.com/sagernet/sing-box/common/tls"
 	C "github.com/sagernet/sing-box/constant"
 	"github.com/sagernet/sing-box/option"
@@ -57,11 +58,13 @@ func NewClient(ctx context.Context, dialer N.Dialer, serverAddr M.Socksaddr, opt
 			PingTimeout:        time.Duration(options.PingTimeout),
 			DisableCompression: true,
 		},
+		// lx: SPEC 093 — a leading "/" in service_name is Xray's custom-path
+		// form; without one the pair below is byte for byte what it was.
 		url: &url.URL{
 			Scheme:  "https",
 			Host:    serverAddr.String(),
-			Path:    "/" + options.ServiceName + "/Tun",
-			RawPath: "/" + url.PathEscape(options.ServiceName) + "/Tun",
+			Path:    grpcname.Path(options.ServiceName),
+			RawPath: grpcname.RawPath(options.ServiceName),
 		},
 		host: host,
 	}

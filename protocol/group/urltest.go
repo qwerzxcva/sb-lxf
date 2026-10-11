@@ -40,6 +40,7 @@ type URLTest struct {
 	outbound.Adapter
 	ctx                          context.Context
 	outbound                     adapter.OutboundManager
+	connection                   adapter.ConnectionManager
 	logger                       log.ContextLogger
 	tags                         []string
 	link                         string
@@ -49,13 +50,26 @@ type URLTest struct {
 	group                        *URLTestGroup
 	checkAccess                  sync.Mutex
 	interruptExternalConnections bool
+	balancer                     *balancer // lx: SPEC 019 — nil for least_test (default)
 }
 
 func NewURLTest(ctx context.Context, router adapter.Router, logger log.ContextLogger, tag string, options option.URLTestOutboundOptions) (adapter.Outbound, error) {
+	// lx: SPEC 019 v2 — round_robin balancer; nil balancer keeps legacy least_test behaviour.
+	balancer, err := newBalancer(options)
+	if err != nil {
+		return nil, err
+	}
+	if warnLegacyTolerance(balancer, options) {
+		logger.Warn("urltest: tolerance is ignored in round_robin mode; use balancer.pool_tolerance")
+	}
+	if balancer == nil && options.Balancer != nil {
+		return nil, E.New("urltest: balancer is only valid with mode: round_robin")
+	}
 	outbound := &URLTest{
 		Adapter:                      outbound.NewAdapter(C.TypeURLTest, tag, []string{N.NetworkTCP, N.NetworkUDP}, options.Outbounds),
 		ctx:                          ctx,
 		outbound:                     service.FromContext[adapter.OutboundManager](ctx),
+		connection:                   service.FromContext[adapter.ConnectionManager](ctx),
 		logger:                       logger,
 		tags:                         options.Outbounds,
 		link:                         options.URL,
@@ -63,6 +77,7 @@ func NewURLTest(ctx context.Context, router adapter.Router, logger log.ContextLo
 		tolerance:                    options.Tolerance,
 		idleTimeout:                  time.Duration(options.IdleTimeout),
 		interruptExternalConnections: options.InterruptExistConnections,
+		balancer:                     balancer,
 	}
 	if len(outbound.tags) == 0 {
 		return nil, E.New("missing tags")
@@ -204,6 +219,19 @@ func (s *URLTest) ListenPacket(ctx context.Context, destination M.Socksaddr) (ne
 	return nil, err
 }
 
+// lx: SPEC 019 — current-node for UI/observability. For a balanced group, returns the last-picked slot.
+func (s *URLTest) Now() string {
+	if s.balancer != nil {
+		return s.group.lastSelected.Load()
+	}
+	if s.group.selectedOutboundTCP != nil {
+		return s.group.selectedOutboundTCP.Tag()
+	} else if s.group.selectedOutboundUDP != nil {
+		return s.group.selectedOutboundUDP.Tag()
+	}
+	return ""
+}
+
 type URLTestGroup struct {
 	ctx                          context.Context
 	outbound                     adapter.OutboundManager
@@ -219,6 +247,9 @@ type URLTestGroup struct {
 	checking                     atomic.Bool
 	selectedOutboundTCP          adapter.Outbound
 	selectedOutboundUDP          adapter.Outbound
+	lastSelected             common.TypedValue[string]         // lx: SPEC 019 round_robin active tag
+	// lx: SPEC 019 v2 — last-selected node tag for UI/observability. Empty string if none yet.
+	lastSelectedTag        string
 	interruptGroup               *interrupt.Group
 	interruptExternalConnections bool
 	access                       sync.Mutex

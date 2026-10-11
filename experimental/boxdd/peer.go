@@ -1,4 +1,5 @@
-//nolint:unused
+//go:build with_boxdd
+
 package main
 
 import (

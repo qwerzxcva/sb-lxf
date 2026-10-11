@@ -23,6 +23,13 @@ type Manager struct {
 	outboundByTag           map[string]adapter.Outbound
 	defaultOutbound         adapter.Outbound
 	defaultOutboundFallback func() (adapter.Outbound, error)
+	// lx:begin chain
+	// SPEC 073: опции созданных outbound'ов по тегу (фабрика звеньев цепочки
+	// пересоздаёт узел из них) и внутренние outbound'ы (хопы цепочки) — видны
+	// Outbound(tag), не входят в Outbounds(), не стартуются/закрываются здесь.
+	optionsByTag  map[string]managedOptions
+	internalByTag map[string]adapter.Outbound
+	// lx:end chain
 }
 
 func NewManager(registry adapter.OutboundRegistry, endpoint adapter.EndpointManager, defaultTag string) *Manager {
@@ -31,6 +38,10 @@ func NewManager(registry adapter.OutboundRegistry, endpoint adapter.EndpointMana
 		endpoint:      endpoint,
 		defaultTag:    defaultTag,
 		outboundByTag: make(map[string]adapter.Outbound),
+		// lx:begin chain
+		optionsByTag:  make(map[string]managedOptions),
+		internalByTag: make(map[string]adapter.Outbound),
+		// lx:end chain
 	}
 }
 
@@ -157,6 +168,14 @@ func (m *Manager) Outbound(tag string) (adapter.Outbound, bool) {
 	if found {
 		return outbound, true
 	}
+	// lx:begin chain
+	m.access.RLock()
+	outbound, found = m.internalByTag[tag]
+	m.access.RUnlock()
+	if found {
+		return outbound, true
+	}
+	// lx:end chain
 	return m.endpoint.Get(tag)
 }
 
@@ -182,6 +201,7 @@ func (m *Manager) Create(ctx context.Context, router adapter.Router, logger log.
 	}
 	m.outbounds = append(m.outbounds, outbound)
 	m.outboundByTag[tag] = outbound
+	m.optionsByTag[tag] = managedOptions{outboundType: inboundType, options: options} // lx: chain
 	if tag == m.defaultTag || (m.defaultTag == "" && m.defaultOutbound == nil) {
 		m.defaultOutbound = outbound
 	}

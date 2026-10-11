@@ -1,4 +1,4 @@
-//go:build linux
+//go:build with_boxdd && (linux)
 
 package main
 

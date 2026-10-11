@@ -1,4 +1,4 @@
-//go:build !debug
+//go:build with_boxdd && (!debug)
 
 package main
 

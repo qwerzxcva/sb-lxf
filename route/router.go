@@ -4,6 +4,8 @@ import (
 	"context"
 	"os"
 	"runtime"
+	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/sagernet/sing-box/adapter"
@@ -16,13 +18,19 @@ import (
 	"github.com/sagernet/sing/common"
 	E "github.com/sagernet/sing/common/exceptions"
 	"github.com/sagernet/sing/common/task"
+	"github.com/sagernet/sing/common/x/list"
 	"github.com/sagernet/sing/contrab/freelru"
 	"github.com/sagernet/sing/contrab/maphash"
 	"github.com/sagernet/sing/service"
 	"github.com/sagernet/sing/service/pause"
+
+	"golang.org/x/sync/semaphore" // lx: SPEC 046 dns-hijack-async
 )
 
-var _ adapter.Router = (*Router)(nil)
+var (
+	_ adapter.Router                  = (*Router)(nil)
+	_ adapter.ReachabilityInvalidator = (*Router)(nil) // lx: SPEC 020 idle-suspend
+)
 
 type Router struct {
 	ctx               context.Context
@@ -47,27 +55,68 @@ type Router struct {
 	pauseManager      pause.Manager
 	trackers          []adapter.ConnectionTracker
 	platformInterface adapter.PlatformInterface
+	// lx:begin idle-suspend
+	// SPEC 020. idleSuspend is the configured threshold (0 = feature off). idleStop
+	// is closed by Close() to stop the idle tick goroutine. reachCache holds the
+	// event-driven reachable set (recomputed only when reachDirty is set by
+	// InvalidateReachability — selector switch / urltest auto-switch / pool rebuild
+	// / reload); reachMu guards publishing it. reachDirty starts true so the first
+	// tick computes it. endpoint is the endpoint manager: WG/AWG endpoints live
+	// there (NOT in the outbound manager — outbound.Outbounds() never lists them),
+	// so the idle tick must iterate it to find IdleSuspendable endpoints.
+	// idleTeardownSet records that lx.wg.idle_teardown was present in the config,
+	// which an explicit "0" (teardown disabled) makes indistinguishable from
+	// absent in the resolved duration alone. Prerequisite checks key off this,
+	// so "0" still requires lx.wg.idle_suspend and still fails loudly in a build
+	// without the tag. All four come from the resolved `lx` block in the context
+	// (SPEC 098).
+	idleSuspend          time.Duration
+	idleSuspendReachable time.Duration
+	idleTeardown         time.Duration
+	idleTeardownSet      bool
+	idleStop             chan struct{}
+	idlePauseCallback    *list.Element[pause.Callback]
+	reachMu              sync.RWMutex
+	reachCache           map[string]bool
+	reachRefs            map[string]selectionRefs // SPEC 097 — incoming edges per tag, same walk and dirty flag
+	reachDirty           atomic.Bool
+	endpoint             adapter.EndpointManager
+	// lx:end idle-suspend
+	// lx:begin dns-hijack-async
+	// SPEC 046. Bounds concurrent hijacked-DNS exchanges: HijackDNSPacket runs
+	// them off the stack packet loop, and the semaphore caps the goroutines the
+	// loop can spawn while a transport dial hangs (dead detour).
+	dnsHijackSem *semaphore.Weighted
+	// lx:end dns-hijack-async
 }
 
 func NewRouter(ctx context.Context, logFactory log.Factory, options option.RouteOptions, dnsOptions option.DNSOptions) *Router {
-	return &Router{
-		ctx:               ctx,
-		logger:            logFactory.NewLogger("router"),
-		inbound:           service.FromContext[adapter.InboundManager](ctx),
-		outbound:          service.FromContext[adapter.OutboundManager](ctx),
-		dns:               service.FromContext[adapter.DNSRouter](ctx),
-		dnsTransport:      service.FromContext[adapter.DNSTransportManager](ctx),
-		connection:        service.FromContext[adapter.ConnectionManager](ctx),
-		network:           service.FromContext[adapter.NetworkManager](ctx),
-		httpClientManager: service.FromContext[adapter.HTTPClientManager](ctx),
-		rules:             make([]adapter.Rule, 0, len(options.Rules)),
-		ruleSetMap:        make(map[string]adapter.RuleSet),
-		needFindProcess:   hasRule(options.Rules, isProcessRule) || hasDNSRule(dnsOptions.Rules, isProcessDNSRule) || options.FindProcess,
-		needFindNeighbor:  hasRule(options.Rules, isNeighborRule) || hasDNSRule(dnsOptions.Rules, isNeighborDNSRule) || hasLocalNeighborDNSServer(dnsOptions.Servers) || options.FindNeighbor,
-		leaseFiles:        options.DHCPLeaseFiles,
-		pauseManager:      service.FromContext[pause.Manager](ctx),
-		platformInterface: service.FromContext[adapter.PlatformInterface](ctx),
+	router := &Router{
+		ctx:                  ctx,
+		logger:               logFactory.NewLogger("router"),
+		inbound:              service.FromContext[adapter.InboundManager](ctx),
+		outbound:             service.FromContext[adapter.OutboundManager](ctx),
+		dns:                  service.FromContext[adapter.DNSRouter](ctx),
+		dnsTransport:         service.FromContext[adapter.DNSTransportManager](ctx),
+		connection:           service.FromContext[adapter.ConnectionManager](ctx),
+		network:              service.FromContext[adapter.NetworkManager](ctx),
+		httpClientManager:    service.FromContext[adapter.HTTPClientManager](ctx),
+		rules:                make([]adapter.Rule, 0, len(options.Rules)),
+		ruleSetMap:           make(map[string]adapter.RuleSet),
+		needFindProcess:      hasRule(options.Rules, isProcessRule) || hasDNSRule(dnsOptions.Rules, isProcessDNSRule) || options.FindProcess,
+		needFindNeighbor:     hasRule(options.Rules, isNeighborRule) || hasDNSRule(dnsOptions.Rules, isNeighborDNSRule) || hasLocalNeighborDNSServer(dnsOptions.Servers) || options.FindNeighbor,
+		leaseFiles:           options.DHCPLeaseFiles,
+		pauseManager:         service.FromContext[pause.Manager](ctx),
+		platformInterface:    service.FromContext[adapter.PlatformInterface](ctx),
+		idleSuspend:          lxWG(ctx).IdleSuspend,                             // lx: SPEC 020/098 — lx.wg.idle_suspend (0 = off)
+		idleSuspendReachable: lxWG(ctx).IdleSuspendReachable,                    // lx: SPEC 020/098 (0 = reachable never suspends)
+		idleTeardown:         lxWG(ctx).IdleTeardown,                            // lx: SPEC 020/098 level 3 (default = reachable window, explicit "0" = off)
+		idleTeardownSet:      lxWG(ctx).IdleTeardownSet,                         // lx: SPEC 020/098 — "0" is a value, not an absence
+		endpoint:             service.FromContext[adapter.EndpointManager](ctx), // lx: SPEC 020 — idle tick iterates endpoints
+		dnsHijackSem:         semaphore.NewWeighted(dnsHijackConcurrencyLimit),  // lx: SPEC 046
 	}
+	router.reachDirty.Store(true) // lx: SPEC 020 — first tick computes the reachable set
+	return router
 }
 
 func (r *Router) Initialize(rules []option.Rule, ruleSets []option.RuleSet) error {
@@ -217,7 +266,14 @@ func (r *Router) Start(stage adapter.StartStage, scope *adapter.Scope) error {
 		if r.ruleSetUpdater != nil {
 			r.ruleSetUpdater.Start()
 		}
-		return nil
+		// lx: SPEC 020 — start the idle-suspend tick (with_lx_idle_suspend); the
+		// no-tag stub errors here if lx.wg.* is set without the build tag. The
+		// scope stops it; box.Close also stops it earlier (QuiesceForShutdown).
+		scope.Add(func() error {
+			r.stopIdleSuspend()
+			return nil
+		})
+		return r.startIdleSuspend()
 	case adapter.StartStateStarted:
 		for _, ruleSet := range r.ruleSets {
 			ruleSet.Cleanup()

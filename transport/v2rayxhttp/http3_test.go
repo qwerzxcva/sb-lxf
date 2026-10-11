@@ -1,0 +1,263 @@
+//go:build with_quic
+
+package v2rayxhttp
+
+import(
+	"context"
+	"crypto/sha256"
+	stdTLS"crypto/tls"
+	"crypto/x509"
+	"errors"
+	"io"
+	"net"
+	"net/http"
+	"testing"
+	"time"
+
+	"github.com/sagernet/quic-go"
+	"github.com/sagernet/quic-go/http3"
+	"github.com/sagernet/sing-box/common/badh2"
+	"github.com/sagernet/sing-box/common/tls"
+	"github.com/sagernet/sing-box/log"
+	"github.com/sagernet/sing-box/option"
+	M"github.com/sagernet/sing/common/metadata"
+	N"github.com/sagernet/sing/common/network"
+
+	"golang.org/x/net/http2"
+)
+
+functestCertificate(t*testing.T)(*stdTLS.Certificate,[]byte){
+	t.Helper()
+	certificate,err:=tls.GenerateKeyPair(nil,nil,time.Now,"localhost")
+	iferr!=nil{
+		t.Fatal(err)
+	}
+	leaf,err:=x509.ParseCertificate(certificate.Certificate[0])
+	iferr!=nil{
+		t.Fatal(err)
+	}
+	publicKey,err:=x509.MarshalPKIXPublicKey(leaf.PublicKey)
+	iferr!=nil{
+		t.Fatal(err)
+	}
+	hash:=sha256.Sum256(publicKey)
+	returncertificate,hash[:]
+}
+
+funcTestHTTP3KeepAlivePeriod(t*testing.T){
+	for_,testCase:=range[]struct{
+		in,wanttime.Duration
+	}{
+		{0,10*time.Second},
+		{25*time.Second,25*time.Second},
+		{-time.Second,0},
+	}{
+		newConn,err:=newHTTP3Transport(N.SystemDialer,M.ParseSocksaddr("127.0.0.1:443"),testTLSConfig(t,"h3"),testCase.in,func(string){})
+		iferr!=nil{
+			t.Fatal(err)
+		}
+		conn:=newConn().(*http3XmuxConn)
+		quicConfig:=conn.transport.QUICConfig
+		ifquicConfig.KeepAlivePeriod!=testCase.want{
+			t.Fatalf("KeepAlivePeriod(%v)=%v,want%v",testCase.in,quicConfig.KeepAlivePeriod,testCase.want)
+		}
+		ifquicConfig.MaxIdleTimeout!=300*time.Second||quicConfig.MaxIncomingStreams!=-1||!quicConfig.ChromeParrot{
+			t.Fatalf("quic.ConfigdiffersfromXray's:%+v",quicConfig)
+		}
+		ifnextProtos:=conn.transport.TLSClientConfig.NextProtos;len(nextProtos)!=1||nextProtos[0]!="h3"{
+			t.Fatalf("NextProtos=%v",nextProtos)
+		}
+		conn.Close()
+	}
+}
+
+//TestHTTP3XmuxConnIsClosed:evictedafterourCloseandoncetheQUIC
+//connectionitdialedisgone.
+funcTestHTTP3XmuxConnIsClosed(t*testing.T){
+	newConn,err:=newHTTP3Transport(N.SystemDialer,M.ParseSocksaddr("127.0.0.1:443"),testTLSConfig(t,"h3"),0,func(string){})
+	iferr!=nil{
+		t.Fatal(err)
+	}
+	closedByUs:=newConn().(*http3XmuxConn)
+	ifclosedByUs.IsClosed(){
+		t.Fatal("freshconnectionreportsclosed")
+	}
+	closedByUs.Close()
+	if!closedByUs.IsClosed(){
+		t.Fatal("IsClosedafterClose=false")
+	}
+
+	certificate,_:=testCertificate(t)
+	listener,err:=quic.ListenAddr("127.0.0.1:0",&stdTLS.Config{Certificates:[]stdTLS.Certificate{*certificate},NextProtos:[]string{"h3"}},nil)
+	iferr!=nil{
+		t.Fatal(err)
+	}
+	deferlistener.Close()
+	gofunc(){
+		for{
+			conn,err:=listener.Accept(context.Background())
+			iferr!=nil{
+				return
+			}
+			deferconn.CloseWithError(0,"")
+		}
+	}()
+	ctx,cancel:=context.WithTimeout(context.Background(),5*time.Second)
+	defercancel()
+	quicConn,err:=quic.DialAddr(ctx,listener.Addr().String(),&stdTLS.Config{InsecureSkipVerify:true,NextProtos:[]string{"h3"}},nil)
+	iferr!=nil{
+		t.Fatal(err)
+	}
+	died:=newConn().(*http3XmuxConn)
+	deferdied.Close()
+	died.conn.Store(quicConn)
+	ifdied.IsClosed(){
+		t.Fatal("liveQUICconnectionreportsclosed")
+	}
+	quicConn.CloseWithError(0,"")
+	select{
+	case<-quicConn.Context().Done():
+	case<-time.After(5*time.Second):
+		t.Fatal("QUICcontextnotdone")
+	}
+	if!died.IsClosed(){
+		t.Fatal("IsClosedaftertheQUICconnectiondied=false")
+	}
+}
+
+//TestHideQUICError:quic-go/http3typesdonotleavetheconn,keeptheir
+//text,loseTimeout()/Temporary(),andconnection-levelonesstillreadas
+//net.ErrClosed(SPEC104§7).
+funcTestHideQUICError(t*testing.T){
+	typetimeoutinterface{Timeout()bool}
+	typetemporaryinterface{Temporary()bool}
+	cases:=[]struct{
+		errerror
+		closedbool
+	}{
+		{&http3.Error{Remote:true,ErrorCode:http3.ErrCodeInternalError},false},
+		{&quic.StreamError{StreamID:4,ErrorCode:1,Remote:true},false},
+		{&quic.IdleTimeoutError{},true},
+		{&quic.HandshakeTimeoutError{},true},
+		{&quic.StatelessResetError{},true},
+		{&quic.TransportError{ErrorCode:quic.InternalError,Remote:true},true},
+		{&quic.ApplicationError{ErrorCode:0x100,Remote:true},true},
+	}
+	for_,testCase:=rangecases{
+		hidden:=hideTransportError(testCase.err)
+		ifhidden.Error()!=testCase.err.Error(){
+			t.Fatalf("%T:text%q,want%q",testCase.err,hidden.Error(),testCase.err.Error())
+		}
+		if_,isHidden:=hidden.(*quicHiddenError);!isHidden{
+			t.Fatalf("%Tleakedas%T",testCase.err,hidden)
+		}
+		var(
+			h3Error*http3.Error
+			streamError*quic.StreamError
+			idleTimeoutError*quic.IdleTimeoutError
+			resetError*quic.StatelessResetError
+		)
+		iferrors.As(hidden,&h3Error)||errors.As(hidden,&streamError)||errors.As(hidden,&idleTimeoutError)||errors.As(hidden,&resetError){
+			t.Fatalf("%Treachablethrougherrors.As",testCase.err)
+		}
+		ifvalue,ok:=hidden.(timeout);ok&&value.Timeout(){
+			t.Fatalf("%T:Timeout()=true",testCase.err)
+		}
+		ifvalue,ok:=hidden.(temporary);ok&&value.Temporary(){
+			t.Fatalf("%T:Temporary()=true",testCase.err)
+		}
+		ifgot:=errors.Is(hidden,net.ErrClosed);got!=testCase.closed{
+			t.Fatalf("%T:errors.Is(net.ErrClosed)=%v,want%v",testCase.err,got,testCase.closed)
+		}
+	}
+	ifhideTransportError(io.EOF)!=io.EOF||hideTransportError(nil)!=nil{
+		t.Fatal("io.EOF/nilmustpassthrough")
+	}
+	varstreamErrorhttp2.StreamError
+	iferrors.As(hideTransportError(http2.StreamError{StreamID:1,Code:http2.ErrCodeInternal}),&streamError){
+		t.Fatal("http2.StreamErrorleaked")
+	}
+	if_,isRemote:=hideTransportError(http2.StreamError{StreamID:1}).(*badh2.RemoteStreamError);!isRemote{
+		t.Fatal("http2.StreamErrornothiddenbybadh2")
+	}
+}
+
+//TestHTTP3BreakerClassification:ourcancelisneutral,aremotestreamreset
+//counts,andalocallyclosedbodyreadsasnet.ErrClosed.
+funcTestHTTP3BreakerClassification(t*testing.T){
+	transport:=&failingRT{errs:[]error{context.Canceled,&http3.Error{Remote:true,ErrorCode:http3.ErrCodeInternalError}}}
+	manager:=singleTransportXmux(transport)
+	client,_:=manager.get()
+	client.roundTrip(testRequest(t))
+	iffails:=client.consecFails.Load();fails!=0{
+		t.Fatalf("context.Canceledcounted:consecFails=%d",fails)
+	}
+	client.roundTrip(testRequest(t))
+	iffails:=client.consecFails.Load();fails!=1{
+		t.Fatalf("remotehttp3.Errornotcounted:consecFails=%d",fails)
+	}
+
+	varbreakerconnBreaker
+	breaker.localClosed.Store(true)
+	localClose:=&http3.Error{Remote:false,ErrorCode:http3.ErrCodeRequestCanceled}
+	ifgot:=breaker.outboundErr(hideTransportError(localClose),nil);got!=net.ErrClosed{
+		t.Fatalf("localclose=%v,wantnet.ErrClosed",got)
+	}
+}
+
+//TestHTTP3StreamOneRoundTrip:astream-oneexchangeoverHTTP/3againstan
+//in-processhttp3server,certificatepinnedbypublickey.
+funcTestHTTP3StreamOneRoundTrip(t*testing.T){
+	certificate,hash:=testCertificate(t)
+	packetConn,err:=net.ListenPacket("udp","127.0.0.1:0")
+	iferr!=nil{
+		t.Fatal(err)
+	}
+	server:=&http3.Server{
+		TLSConfig:http3.ConfigureTLSConfig(&stdTLS.Config{Certificates:[]stdTLS.Certificate{*certificate}}),
+		Handler:http.HandlerFunc(func(whttp.ResponseWriter,r*http.Request){
+			w.WriteHeader(http.StatusOK)
+			w.(http.Flusher).Flush()
+			buffer:=make([]byte,4)
+			n,_:=io.ReadFull(r.Body,buffer)
+			w.Write(buffer[:n])
+			w.(http.Flusher).Flush()
+			io.Copy(io.Discard,r.Body)
+		}),
+	}
+	goserver.Serve(packetConn)
+	deferserver.Close()
+
+	tlsConfig,err:=tls.NewClient(context.Background(),log.NewNOPFactory().Logger(),"localhost",option.OutboundTLSOptions{
+		Enabled:true,
+		ServerName:"localhost",
+		ALPN:[]string{"h3"},
+		CertificatePublicKeySHA256:[][]byte{hash},
+	})
+	iferr!=nil{
+		t.Fatal(err)
+	}
+	transport,err:=NewClient(context.Background(),N.SystemDialer,M.SocksaddrFromNet(packetConn.LocalAddr()),option.V2RayXHTTPOptions{Mode:modeStreamOne,Path:"/xhttp/"},tlsConfig)
+	iferr!=nil{
+		t.Fatal(err)
+	}
+	client:=transport.(*Client)
+	deferclient.Close()
+	ifclient.httpVersion!=httpVersion3{
+		t.Fatalf("version=%s",client.httpVersion)
+	}
+	ctx,cancel:=context.WithTimeout(context.Background(),5*time.Second)
+	defercancel()
+	conn,err:=client.DialContext(ctx)
+	iferr!=nil{
+		t.Fatal(err)
+	}
+	deferconn.Close()
+	if_,err:=conn.Write([]byte("ping"));err!=nil{
+		t.Fatal(err)
+	}
+	buffer:=make([]byte,4)
+	if_,err:=io.ReadFull(conn,buffer);err!=nil||string(buffer)!="ping"{
+		t.Fatalf("echo=%q,%v",buffer,err)
+	}
+}

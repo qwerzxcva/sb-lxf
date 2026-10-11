@@ -117,6 +117,14 @@ func (s *Selector) Selected(network string) adapter.Outbound {
 	return s.selected.Load()
 }
 
+// lx: current-node tag for diagnostics; empty when no explicit selection.
+func (s *Selector) Now() string {
+	if selected := s.selected.Load(); selected != nil {
+		return selected.Tag()
+	}
+	return ""
+}
+
 func (s *Selector) AttachConnection(closer io.Closer) func() {
 	return s.interruptGroup.Add(closer, true)
 }

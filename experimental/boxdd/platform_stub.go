@@ -1,4 +1,4 @@
-//go:build !windows && !(linux && !android)
+//go:build with_boxdd && (!windows && !(linux && !android))
 
 package main
 

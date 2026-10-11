@@ -17,12 +17,27 @@ type Manager struct {
 	scope         *adapter.Scope
 	endpoints     []adapter.Endpoint
 	endpointByTag map[string]adapter.Endpoint
+	// lx:begin chain
+	// SPEC 073: опции созданных endpoint'ов по тегу — фабрика звеньев цепочки
+	// пересоздаёт endpoint из них.
+	optionsByTag map[string]managedOptions
+	// lx:end chain
+	// lx:begin fast-close
+	// SPEC 030: each endpoint runs in its own scope so Close can tear them down
+	// concurrently (see manager_close_lx.go).
+	logger          log.ContextLogger
+	endpointScopes  map[adapter.Endpoint]*adapter.Scope
+	endpointClosers []*adapter.Scope
+	// lx:end fast-close
 }
 
-func NewManager(registry adapter.EndpointRegistry) *Manager {
+func NewManager(logger log.ContextLogger, registry adapter.EndpointRegistry) *Manager {
 	return &Manager{
-		registry:      registry,
-		endpointByTag: make(map[string]adapter.Endpoint),
+		registry:       registry,
+		endpointByTag:  make(map[string]adapter.Endpoint),
+		optionsByTag:   make(map[string]managedOptions), // lx: chain
+		logger:         logger,                          // lx: fast-close
+		endpointScopes: make(map[adapter.Endpoint]*adapter.Scope),
 	}
 }
 
@@ -31,13 +46,14 @@ func (m *Manager) Start(stage adapter.StartStage, scope *adapter.Scope) error {
 	defer m.access.Unlock()
 	if stage == adapter.StartStateInitialize {
 		m.scope = scope
+		scope.Add(m.closeEndpoints) // lx: fast-close
 	}
 	if stage == adapter.StartStateStart {
 		return nil
 	}
 	for _, endpoint := range m.endpoints {
 		name := "endpoint/" + endpoint.Type() + "[" + endpoint.Tag() + "]"
-		err := scope.Start(name, endpoint, stage)
+		err := m.endpointScope(endpoint).Start(name, endpoint, stage) // lx: fast-close
 		if err != nil {
 			return err
 		}
@@ -46,7 +62,10 @@ func (m *Manager) Start(stage adapter.StartStage, scope *adapter.Scope) error {
 }
 
 func (m *Manager) StartEndpoint(endpoint adapter.Endpoint) error {
-	return m.scope.Start("endpoint/"+endpoint.Type()+"["+endpoint.Tag()+"]", endpoint, adapter.StartStateStart)
+	m.access.Lock()
+	endpointScope := m.endpointScope(endpoint) // lx: fast-close
+	m.access.Unlock()
+	return endpointScope.Start("endpoint/"+endpoint.Type()+"["+endpoint.Tag()+"]", endpoint, adapter.StartStateStart)
 }
 
 func (m *Manager) Endpoints() []adapter.Endpoint {
@@ -75,5 +94,6 @@ func (m *Manager) Create(ctx context.Context, router adapter.Router, logger log.
 	}
 	m.endpoints = append(m.endpoints, endpoint)
 	m.endpointByTag[tag] = endpoint
+	m.optionsByTag[tag] = managedOptions{endpointType: outboundType, options: options} // lx: chain
 	return nil
 }

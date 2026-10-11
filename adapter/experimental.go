@@ -154,6 +154,8 @@ type OutboundGroup interface {
 	All() []string
 	Selected(network string) Outbound
 	AttachConnection(closer io.Closer) (detach func())
+	// lx: current-node tag for diagnostics/observability; empty when none selected.
+	Now() string
 }
 
 type URLTestGroup interface {

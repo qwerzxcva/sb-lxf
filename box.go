@@ -3,6 +3,7 @@ package box
 import (
 	"context"
 	"io"
+	"sync/atomic"
 	"time"
 
 	"github.com/sagernet/sing-box/adapter"
@@ -13,6 +14,7 @@ import (
 	boxService "github.com/sagernet/sing-box/adapter/service"
 	"github.com/sagernet/sing-box/common/certificate"
 	"github.com/sagernet/sing-box/common/dialer"
+	"github.com/sagernet/sing-box/common/dnstrack"
 	"github.com/sagernet/sing-box/common/httpclient"
 	"github.com/sagernet/sing-box/common/netns"
 	"github.com/sagernet/sing-box/common/taskmonitor"
@@ -59,6 +61,7 @@ type Box struct {
 	internalService     []adapter.LifecycleService
 	ntpService          *ntp.Service
 	scope               *adapter.Scope
+	quiesced            atomic.Bool // lx: SPEC 030 — QuiesceForShutdown runs once
 }
 
 type Options struct {
@@ -183,6 +186,14 @@ func New(options Options) (*Box, error) {
 		return nil, E.Cause(err, "create log factory")
 	}
 	service.MustRegister[log.Factory](ctx, logFactory)
+	// lx:begin lx-block
+	// SPEC 098 — resolve the root `lx` block into the context before the router
+	// and every node are created.
+	ctx, err = applyLXOptions(ctx, &options.Options, logFactory.NewLogger("lx"))
+	if err != nil {
+		return nil, err
+	}
+	// lx:end lx-block
 
 	var internalServices []adapter.LifecycleService
 	routeOptions := common.PtrValueOrDefault(options.Route)
@@ -205,7 +216,7 @@ func New(options Options) (*Box, error) {
 	service.MustRegister[adapter.NetworkNamespaceManager](ctx, netnsManager)
 	internalServices = append(internalServices, netnsManager)
 	dnsOptions := common.PtrValueOrDefault(options.DNS)
-	endpointManager := endpoint.NewManager(endpointRegistry)
+	endpointManager := endpoint.NewManager(logFactory.NewLogger("endpoint"), endpointRegistry) // lx: SPEC 030 — per-endpoint close scopes log through it
 	inboundManager := inbound.NewManager(inboundRegistry, endpointManager)
 	outboundManager := outbound.NewManager(outboundRegistry, endpointManager, routeOptions.Final)
 	dnsTransportManager := dns.NewTransportManager(dnsTransportRegistry, outboundManager, dnsOptions.Final)
@@ -236,6 +247,8 @@ func New(options Options) (*Box, error) {
 	httpClientService := adapter.LifecycleService(httpClientManager)
 	router := route.NewRouter(ctx, logFactory, routeOptions, dnsOptions)
 	service.MustRegister[adapter.Router](ctx, router)
+	service.MustRegister[adapter.ReachabilityInvalidator](ctx, router) // lx: SPEC 020 — event points invalidate the reachable cache
+	service.MustRegister[adapter.ReachabilityReporter](ctx, router)    // lx: SPEC 020 — urltest gates probes on group reachability
 	err = router.Initialize(routeOptions.Rules, routeOptions.RuleSet)
 	if err != nil {
 		return nil, E.Cause(err, "initialize router")
@@ -245,6 +258,14 @@ func New(options Options) (*Box, error) {
 		service.MustRegisterPtr(ctx, trafficManager)
 		router.AppendTracker(trafficManager)
 		internalServices = append(internalServices, trafficManager)
+		// lx: SPEC 018 — DNS query stream. Registered as *dnstrack.Manager so the dns
+		// client (service.PtrFromContext in dns/client_log.go — pairs with MustRegisterPtr;
+		// FromContext[*T] keys on **T and silently returns nil, the §180 dead-stream bug)
+		// emits structured, process-attributed query events the command server exposes as
+		// SubscribeDNSQueries.
+		dnsQueryManager := dnstrack.NewManager()
+		service.MustRegisterPtr(ctx, dnsQueryManager)
+		internalServices = append(internalServices, dnsQueryManager)
 		var clashDefaultMode string
 		if experimentalOptions.ClashAPI != nil {
 			clashDefaultMode = experimentalOptions.ClashAPI.DefaultMode
@@ -276,7 +297,10 @@ func New(options Options) (*Box, error) {
 			transportOptions.Options,
 		)
 		if err != nil {
-			return nil, E.Cause(err, "initialize DNS server[", i, "]")
+			// lx: SPEC 092 — the index alone does not identify the element for a
+			// user with a hundred tagged nodes. The tail repeats the logger name
+			// (<type>[<tag>]); the upstream prefix stays byte-for-byte.
+			return nil, E.Cause(err, "initialize DNS server[", i, "] ", transportOptions.Type, "[", tag, "]")
 		}
 	}
 	err = dnsRouter.Initialize(dnsOptions.Rules)
@@ -306,7 +330,8 @@ func New(options Options) (*Box, error) {
 			endpointOptions.Options,
 		)
 		if err != nil {
-			return nil, E.Cause(err, "initialize endpoint[", i, "]")
+			// lx: SPEC 092
+			return nil, E.Cause(err, "initialize endpoint[", i, "] ", endpointOptions.Type, "[", tag, "]")
 		}
 	}
 	for i, inboundOptions := range options.Inbounds {
@@ -325,7 +350,8 @@ func New(options Options) (*Box, error) {
 			inboundOptions.Options,
 		)
 		if err != nil {
-			return nil, E.Cause(err, "initialize inbound[", i, "]")
+			// lx: SPEC 092
+			return nil, E.Cause(err, "initialize inbound[", i, "] ", inboundOptions.Type, "[", tag, "]")
 		}
 	}
 	for i, serviceOptions := range options.Services {
@@ -343,7 +369,8 @@ func New(options Options) (*Box, error) {
 			serviceOptions.Options,
 		)
 		if err != nil {
-			return nil, E.Cause(err, "initialize service[", i, "]")
+			// lx: SPEC 092
+			return nil, E.Cause(err, "initialize service[", i, "] ", serviceOptions.Type, "[", tag, "]")
 		}
 	}
 	for i, outboundOptions := range options.Outbounds {
@@ -369,7 +396,8 @@ func New(options Options) (*Box, error) {
 			outboundOptions.Options,
 		)
 		if err != nil {
-			return nil, E.Cause(err, "initialize outbound[", i, "]")
+			// lx: SPEC 092
+			return nil, E.Cause(err, "initialize outbound[", i, "] ", outboundOptions.Type, "[", tag, "]")
 		}
 	}
 	for i, certificateProviderOptions := range options.CertificateProviders {
@@ -387,7 +415,8 @@ func New(options Options) (*Box, error) {
 			certificateProviderOptions.Options,
 		)
 		if err != nil {
-			return nil, E.Cause(err, "initialize certificate provider[", i, "]")
+			// lx: SPEC 092
+			return nil, E.Cause(err, "initialize certificate provider[", i, "] ", certificateProviderOptions.Type, "[", tag, "]")
 		}
 	}
 	outboundManager.Initialize(func() (adapter.Outbound, error) {
@@ -654,6 +683,18 @@ func (s *Box) start() error {
 }
 
 func (s *Box) Close() error {
+	// lx: SPEC 030 — fast shutdown. Stop the idle/urltest tick and close every
+	// WG/AWG UDP socket BEFORE the scope closes the endpoints. Without this,
+	// endpoints are torn down while the tick is still issuing wakes: each
+	// Endpoint.Close blocks on resumeMu behind an in-flight ping-wake doing a
+	// full device rebuild + handshake (~0.5–5s each) — the 10s+ Android stop
+	// hang. Quiescing here removes that contention and unblocks every receive
+	// worker's ReadFrom up front, so the close pass is bounded by teardown, not
+	// by wakes. Concurrent callers are safe: Scope.Close hands its cleanups to
+	// exactly one of them (SPEC 070's CAS is now upstream's).
+	if s.quiesced.CompareAndSwap(false, true) && s.router != nil {
+		s.router.QuiesceForShutdown()
+	}
 	return s.scope.Close()
 }
 
