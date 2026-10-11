@@ -176,7 +176,7 @@ func buildAndroid() {
 	// ~tens of MB + background-service overhead.
 	var baseTags []string
 	if slimEnabled {
-		// Drop only the features sb-AI has no use for. NOTE: tailscale is KEPT
+		// Drop only the features sb-AI has no reference to. NOTE: tailscale is KEPT
 		// (with all ts_omit_*) because sb-AI exposes "tailscale" as a first-class
 		// endpoint type (NodeEditorScreen / SingBoxConfigGenerator ENDPOINT_TYPES);
 		// removing it would break that feature. usbip / openvpn / openconnect are
@@ -184,12 +184,11 @@ func buildAndroid() {
 		heavyExcluded := []string{
 			"with_usbip", "with_openvpn", "with_openconnect",
 		}
-		// Add lx_idle_suspend (SPEC 020): suspends idle WireGuard/AWG endpoints,
-		// freeing recv-worker bufsArrs (dominant GC-scan holder) and preventing
-		// background work for unused nodes. No platform restriction (cross-platform).
-		// Reference: leadaxe sing-box-lx, FlClash, Bettbox, Karing, PuerNya all
-		// enable this in their Android-optimized builds.
-		baseTags = append(filterTags(sharedTags, heavyExcluded...), "with_lx_idle_suspend")
+		// NOTE: with_lx_idle_suspend was considered for this profile but deferred
+		// because reaching reachability_lx.go's call to transport.OutboundTag()
+		// requires completing the Leadaxe port to adapter.DNSTransport (interface
+		// + ~10 transport implementations). See TODO:port-outbound-tag-in-dns-transport.
+		baseTags = append(filterTags(sharedTags, heavyExcluded...))
 	} else {
 		baseTags = append([]string{}, sharedTags...)
 	}
