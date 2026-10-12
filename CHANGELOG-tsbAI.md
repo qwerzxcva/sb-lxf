@@ -125,3 +125,18 @@ Based on SagerNet/sing-box **v1.15.0-alpha.12**.
   发布产物更干净）。
 - sb-AI 侧：`scripts/fetch-libbox.sh` 默认档 → `v1.15.0-ts.8`；
   `.github/workflows/build.yml` + `release.yml` 的 `LIBBOX_VERSION` → ts.8。
+
+## v1.15.0-ts.9 (2026-10-13) — 修正 Android-only 裁剪 + CI 编译缓存
+- **修正 ts.8 过度裁剪**：sb-AI 的 `OUTBOUND_TYPES`（NodeEditorScreen.kt:60）
+  实际包含 `tor` 和 `ssh`，ts.8 误删了它们。现恢复 slim 里的
+  `with_tor` / `with_ssh`（sb-AI 完美适配优先）。
+- **新增裁剪** `with_naive_outbound`：sb-AI 节点类型里没有 naive
+  （HTTP CONNECT 隧道），slim 档不再编译 naive 出站构造器。
+  （naive 入站仍无条件注册，彻底裁需再门控入站注册，留待后续。）
+- **CI 编译效率**：`build-tsbai.yml` 两个 Android AAR 任务新增
+  `actions/cache@v4` 缓存 `~/go/pkg/mod`（模块缓存，按 go.mod/go.sum
+  hash）+ `~/.cache/go-build`（构建缓存，按 Go 版本）。增量重建跳过
+  依赖下载与共享包重编译，显著加快每次 push 的编译速度。
+- 净效果（slim）：裁掉 anytls / shadowtls / snell / masque /
+  naive_outbound 共 5 族，保留 tor / ssh；AAR 更小、运行期无这些协议的
+  闲置 handler；tor/ssh 节点类型在 sb-AI 里仍可正常生成。
