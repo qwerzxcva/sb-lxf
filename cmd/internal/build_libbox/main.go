@@ -24,6 +24,10 @@ var (
 	// use (usbip / openvpn / openconnect / tailscale + all ts_omit_*). Keeps the
 	// core proxy stack (quic / wireguard / utls / naive / clash_api).
 	slimEnabled bool
+	// rustAccel: link the optional Rust accelerator (contrib/rust-accel) via cgo,
+	// adding the `with_rust_accel` build tag. Off by default — the default build
+	// uses the pure-Go fallback in the same package.
+	rustAccel bool
 	// withTailscale bool
 )
 
@@ -32,6 +36,7 @@ func init() {
 	flag.StringVar(&target, "target", "android", "target platform")
 	flag.StringVar(&platform, "platform", "", "specify platform")
 	flag.BoolVar(&slimEnabled, "slim", false, "android-only slim profile: drop usbip/openvpn/openconnect/tailscale for lower power & smaller AAR")
+	flag.BoolVar(&rustAccel, "rust-accel", false, "link the optional Rust accelerator (with_rust_accel tag + contrib/rust-accel static lib)")
 	// flag.BoolVar(&withTailscale, "with-tailscale", false, "build tailscale for iOS and tvOS")
 }
 
@@ -184,11 +189,14 @@ func buildAndroid() {
 		heavyExcluded := []string{
 			"with_usbip", "with_openvpn", "with_openconnect",
 		}
-		// NOTE: with_lx_idle_suspend was considered for this profile but deferred
-		// because reaching reachability_lx.go's call to transport.OutboundTag()
-		// requires completing the Leadaxe port to adapter.DNSTransport (interface
-		// + ~10 transport implementations). See TODO:port-outbound-tag-in-dns-transport.
 		baseTags = append(filterTags(sharedTags, heavyExcluded...))
+		// Idle-suspend (SPEC 020): idle WireGuard/Tailscale endpoints suspend after
+		// the configured window, cutting background work to zero for unused tunnels.
+		// Enabled in the slim profile (power-optimized). The reachability seed in
+		// route/reachability_lx.go now uses an optional DNSTransportWithOutboundTag
+		// sub-interface, so this tag compiles cleanly without touching the base
+		// DNSTransport interface or the ~10 DNS transport implementations.
+		baseTags = append(baseTags, "with_lx_idle_suspend")
 	} else {
 		baseTags = append([]string{}, sharedTags...)
 	}
@@ -196,6 +204,11 @@ func buildAndroid() {
 	// Build main variant (SDK 24)
 	mainTags := append([]string{}, baseTags...)
 	// mainTags = append(mainTags, memcTags...)
+	// Optional Rust accelerator (contrib/rust-accel) — cgo links the static lib
+	// and enables the Rust LPM/hash path. Off by default.
+	if rustAccel {
+		mainTags = append(mainTags, "with_rust_accel")
+	}
 	if debugEnabled {
 		mainTags = append(mainTags, debugTags...)
 	}
