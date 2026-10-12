@@ -74,6 +74,9 @@ func init() {
 	debugFlags = append(debugFlags, "-ldflags", build_shared.LinkerFlags(currentTag, true))
 
 	sharedTags = append(sharedTags, "with_quic", "with_wireguard", "with_utls", "with_naive_outbound", "with_clash_api", "with_usbip", "with_openvpn", "with_openconnect", "badlinkname", "tfogo_checklinkname0")
+	// Optional protocol families — kept in the default (full) build for
+	// backward compatibility; the Android-only slim profile excludes them.
+	sharedTags = append(sharedTags, "with_anytls", "with_shadowtls", "with_snell", "with_tor", "with_ssh", "with_masque")
 	darwinTags = append(darwinTags, "with_dhcp", "grpcnotrace")
 	// memcTags = append(memcTags, "with_tailscale")
 	sharedTags = append(sharedTags, "with_tailscale", "ts_omit_logtail", "ts_omit_ssh", "ts_omit_drive", "ts_omit_taildrop", "ts_omit_webclient", "ts_omit_doctor", "ts_omit_capture", "ts_omit_kube", "ts_omit_aws", "ts_omit_synology", "ts_omit_bird")
@@ -188,6 +191,12 @@ func buildAndroid() {
 		// unreferenced anywhere in sb-AI.
 		heavyExcluded := []string{
 			"with_usbip", "with_openvpn", "with_openconnect",
+			// Android-only (sb-AI): drop the protocol families sb-AI never emits
+			// in its config generator (vless/vmess/trojan/ss/socks/hysteria2/hysteria/
+			// tuic/wireguard/tailscale are the only ones it uses). Removing these
+			// sheds their outbound/inbound code + deps, cutting AAR size and
+			// runtime CPU (no idle handlers for dead protocols).
+			"with_anytls", "with_shadowtls", "with_snell", "with_tor", "with_ssh", "with_masque",
 		}
 		baseTags = append(filterTags(sharedTags, heavyExcluded...))
 		// Idle-suspend (SPEC 020): idle WireGuard/Tailscale endpoints suspend after
