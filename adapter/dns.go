@@ -84,6 +84,16 @@ type DNSTransportWithEnvironment interface {
 	Environment() []string
 }
 
+// DNSTransportWithOutboundTag is implemented by DNS transports that connect
+// through a specific outbound (e.g. a WireGuard tunnel used for DNS).
+// Used by the idle-suspend reachability computation (route/reachability_lx.go,
+// gated behind `with_lx_idle_suspend`) to seed "reachable" outbounds.
+// Transports that don't implement this return no outbound tag.
+type DNSTransportWithOutboundTag interface {
+	DNSTransport
+	OutboundTag() string
+}
+
 type DNSTransportRegistry interface {
 	option.DNSTransportOptionsRegistry
 	CreateDNSTransport(ctx context.Context, logger log.ContextLogger, tag string, transportType string, options any) (DNSTransport, error)
