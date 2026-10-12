@@ -17,9 +17,26 @@ with_tailscale,ts_omit_*(logtail,ssh,drive,taildrop,webclient,doctor,capture,kub
 `make lib_android_slim` = `build_libbox -target android -slim`.
 Drops: `with_usbip`, `with_openvpn`, `with_openconnect` (unreferenced by sb-AI).
 `with_tailscale` + all `ts_omit_*` are KEPT because sb-AI exposes Tailscale as a
-first-class endpoint type. Adds: `with_lx_idle_suspend` (SPEC 020, idle-suspend). Keeps the core proxy stack sb-AI actually consumes:
-`with_quic, with_wireguard, with_utls, with_naive_outbound, with_clash_api,
-badlinkname, tfogo_checklinkname0`.
+first-class endpoint type. Adds: `with_lx_idle_suspend` (SPEC 020, idle-suspend).
+
+### Android-only protocol cut (ts.8)
+The slim profile now also gates 6 protocol families behind new build tags and
+excludes them from sb-AI (sb-AI's config generator only emits
+vless/vmess/trojan/shadowsocks/socks/hysteria2/hysteria/tuic/wireguard/tailscale):
+
+| tag | protocol | reason |
+|-----|----------|--------|
+| `with_anytls` | anytls | not used by sb-AI |
+| `with_shadowtls` | shadowtls | not used by sb-AI |
+| `with_snell` | snell | not used by sb-AI |
+| `with_tor` | tor | not used by sb-AI |
+| `with_ssh` | ssh | not used by sb-AI |
+| `with_masque` | masque (WARP) | not used by sb-AI |
+
+Default/full build keeps all 6 (tags added to `sharedTags`); only the slim
+profile excludes them. The registration moves to `include/proto_<name>.go`
+(`//go:build with_<name>`) with a no-op stub at `include/proto_<name>_stub.go`
+(`//go:build !with_<name>`), mirroring the openvpn/openconnect pattern.
 
 Benefits:
 - Smaller AAR + lower runtime CPU/battery: unused transports (usbip / openvpn /
