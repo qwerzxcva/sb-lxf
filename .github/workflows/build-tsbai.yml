@@ -18,6 +18,11 @@ on:
           - 'true'
           - 'false'
 
+# Cancel stale pushes in flight — only the latest commit needs a CI run.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
 env:
   GO_VERSION: '1.25.5'
   ANDROID_NDK_VERSION: 'r28c'
