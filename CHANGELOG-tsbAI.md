@@ -92,3 +92,36 @@ Based on SagerNet/sing-box **v1.15.0-alpha.12**.
   advantage over their gvisor stack.
 - CI: the `build-android-aar-slim` job builds and uploads `libbox-{ver}-slim.aar`
   for all pushes/releases. This AAR is ready for sb-AI consumption.
+## v1.15.0-ts.7 — optional Rust LPM / hash accelerator（新增）
+- 新增 `contrib/rust-accel/`：零第三方依赖的 Rust 加速模块，通过 C-ABI FFI
+  暴露给 Go（cgo），默认关闭，启用构建标签 `with_rust_accel` 时链接。
+  - `LpmTable`（LPM / CIDR 最长前缀匹配，v4+v6）：每掩码层有序 HashMap，
+    查询 O(层数)，静态分配、零 GC 压力；适用于大量 IP-CIDR 规则的路由热点。
+  - `fnv1a_64` / `quick_hash64`：连接跟踪 / 去重键哈希。
+  - 两个 Go 文件 (`cgo_rust.go` / `purego.go`) 暴露同一公开 API；未启用时
+    走纯 Go 回退（线性扫描），默认构建行为完全不变。
+  - CI / Makefile：`make rust_accel` 构建 aarch64 静态库（~2 MB 压缩后）；
+    `make lib_android_slim_rust` 生成包含 Rust 加速的 slim AAR。
+- 入口桥接：`experimental/libbox/rust_accel_bridge.go`（//go:build with_rust_accel）。
+  调用方添加 `import _ "github.com/sagernet/sing-box/contrib/rust-accel"` 即可生效。
+- 安全：FFI 边界用 `catch_unwind` 包裹，指针 null 检查全覆盖；Rust panic
+  不会穿透到 Go；C 字符串通过 `sb_rust_free_cstr` 管理生命周期。
+
+## v1.15.0-ts.8 (2026-10-12) — Android-only slim：协议族构建标签化 + 裁掉 Linux 桌面构建
+- 将 6 个 sb-AI 永不使用、但默认常驻编译的协议族（anytls / shadowtls /
+  snell / tor / ssh / masque）改为构建标签可选：新增 `with_anytls`、
+  `with_shadowtls`、`with_snell`、`with_tor`、`with_ssh`、`with_masque`。
+  - 注册逻辑移入 `include/proto_<name>.go`（`//go:build with_<name>`），
+    配 `include/proto_<name>_stub.go`（`//go:build !with_<name>`）空实现，
+    沿用 openvpn/openconnect 的 stub 模式。`include/quic.go` 里的 masque
+    出站也改为调 `registerMasqueOutbound`（去掉了直接 import）。
+  - 默认 / full 构建把这 6 个标签加进 `sharedTags`，行为不变（仍全量编译）。
+  - `lib_android_slim`（sb-AI 发布档）把 6 个标签全部排除：sb-AI 配置生成器
+    只发 vless/vmess/trojan/shadowsocks/socks/hysteria2/hysteria/tuic/
+    wireguard/tailscale，丢弃死协议 → AAR 再小 ~3MB、运行期无这些协议的
+    闲置 handler。
+- CI `build-tsbai.yml`：删掉 `build-linux-amd64` 任务与 release 里的
+  Linux 二进制下载（纯 Android 内核，不再产桌面 binary；编译更快、
+  发布产物更干净）。
+- sb-AI 侧：`scripts/fetch-libbox.sh` 默认档 → `v1.15.0-ts.8`；
+  `.github/workflows/build.yml` + `release.yml` 的 `LIBBOX_VERSION` → ts.8。
