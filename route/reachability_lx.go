@@ -102,8 +102,13 @@ func (r *Router) computeReachability() reachability {
 	var dnsSeeds []string
 	if r.dnsTransport != nil {
 		for _, transport := range r.dnsTransport.Transports() {
-			if tag := transport.OutboundTag(); tag != "" {
-				dnsSeeds = append(dnsSeeds, tag)
+			// Optional: a DNS transport that dials through an outbound (e.g. a WG
+			// tunnel used for DNS) exposes that outbound via DNSTransportWithOutboundTag.
+			// Not all transports implement it — those that don't contribute no seed.
+			if ot, ok := transport.(adapter.DNSTransportWithOutboundTag); ok {
+				if tag := ot.OutboundTag(); tag != "" {
+					dnsSeeds = append(dnsSeeds, tag)
+				}
 			}
 		}
 	}
