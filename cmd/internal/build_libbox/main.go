@@ -179,7 +179,7 @@ func buildAndroid() {
 	// Android-only slim profile: drop heavy features sb-AI does not use, so the
 	// AAR is smaller and the kernel uses less CPU/battery at runtime.
 	// The full feature set is preserved for non-slim (default) builds.
-	// Reference: sb-AI only consumes quic/wireguard/utls/naive/clash_api;
+	// Reference: sb-AI only consumes quic/wireguard/utls/clash_api/tailscale.
 	// usbip / openvpn / openconnect / tailscale are unused on Android and add
 	// ~tens of MB + background-service overhead.
 	var baseTags []string
@@ -189,14 +189,16 @@ func buildAndroid() {
 		// endpoint type (NodeEditorScreen / SingBoxConfigGenerator ENDPOINT_TYPES);
 		// removing it would break that feature. usbip / openvpn / openconnect are
 		// unreferenced anywhere in sb-AI.
+		// Also drop naive_outbound — sb-AI's OUTBOUND_TYPES has NO "naive" entry;
+		// naive (HTTP CONNECT tunnel) is not a node type sb-AI supports.
+		// Restore tor+ssh — sb-AI's OUTBOUND_TYPES includes both.
 		heavyExcluded := []string{
-			"with_usbip", "with_openvpn", "with_openconnect",
-			// Android-only (sb-AI): drop the protocol families sb-AI never emits
-			// in its config generator (vless/vmess/trojan/ss/socks/hysteria2/hysteria/
-			// tuic/wireguard/tailscale are the only ones it uses). Removing these
-			// sheds their outbound/inbound code + deps, cutting AAR size and
-			// runtime CPU (no idle handlers for dead protocols).
-			"with_anytls", "with_shadowtls", "with_snell", "with_tor", "with_ssh", "with_masque",
+			"with_usbip", "with_openvpn", "with_openconnect", "with_naive_outbound",
+			// Android-only (sb-AI): drop protocol families sb-AI never emits.
+			// sb-AI OUTBOUND_TYPES = vless/vmess/trojan/ss/hysteria2/hysteria/
+			//   http/socks/wireguard/tailscale/tor/ssh/direct/block.
+			// Cut: anytls, shadowtls, snell, masque (tor+ssh RESTORED).
+			"with_anytls", "with_shadowtls", "with_snell", "with_masque",
 		}
 		baseTags = append(filterTags(sharedTags, heavyExcluded...))
 		// Idle-suspend (SPEC 020): idle WireGuard/Tailscale endpoints suspend after
